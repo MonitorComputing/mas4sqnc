@@ -39,7 +39,7 @@
 ; Include and configuration directives                                *
 ;**********************************************************************
 
-	#include <c:\mplab\inc\p16C84.inc>
+#include <p16C84.inc>
 
 	__CONFIG   _CP_OFF & _WDT_OFF & _PWRTE_ON & _XT_OSC
 
@@ -216,7 +216,7 @@ SerMTx		SerialTx srlIfStat, TXMFLAG, serMTxByt
 #define GOTUSERBANNER
 ; Select to run user code when booted
 #define MONUSERON
-#include <\dev\projects\picmntr\pic\pic_mntr.inc>
+#include <\dev\projects\monitor\pic\pic_mntr.inc>
 
 
 ;**********************************************************************
@@ -294,15 +294,17 @@ Boot
 		call    EnableMTx
 		call    InitMTx
 
-		call    MonitorInit       ; Perform Monitor initialisation
+		call    UserInit          ; Run user initialisation code
 
+		; Initialise interrupts
 		movlw   RTCCINT
-		movwf   TMR0              ; Load RTCC
+		movwf   TMR0              ; Initialise RTCC for timer interrupts
+		clrf    INTCON            ; Disable all interrupt sources
+		bsf	INTCON,T0IE       ; Enable RTCC interrupts
+		bsf	INTCON,GIE        ; Enable interrupts
 
-		bsf	INTCON,GIE        ; Enable Interrupts
-		bsf	INTCON,T0IE       ; Enable RTCC Interrupts
 
-		goto    MonitorStart      ; Run monitor main loop
+		goto    MonitorMain       ; Run monitor program
 
 
 ;**********************************************************************
