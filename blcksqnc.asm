@@ -1,8 +1,8 @@
+; $Id$
+
 ;**********************************************************************
 ;                                                                     *
-;    Filename:	    blcksqnc.asm                                      *
-;    Date:          26 April 2002                                     *
-;    File Version:  1                                                 *
+;    Description:                                                     *
 ;                                                                     *
 ;    Author:        Chris White                                       *
 ;    Company:       Monitor Computing Services Ltd.                   *
@@ -33,25 +33,22 @@
 ;**********************************************************************
 
 
-	list      p=16C84
+	list      p=16F84
 
-;**********************************************************************
-; Include and configuration directives                                *
-;**********************************************************************
-
-#include <p16C84.inc>
+#include <p16F84.inc>
 
 	__CONFIG   _CP_OFF & _WDT_OFF & _PWRTE_ON & _XT_OSC
 
 ; '__CONFIG' directive is used to embed configuration data within .asm file.
 ; The lables following the directive are located in the respective .inc file.
 ; See respective data sheet for additional information on configuration word.
-; Selection is: Code Protection - off, Watchdog Timer - off, Power-up Timer - on,
-;               Oscillator - Crystal/Resonator
 
 
-; Include serial interface macro definitions
-#include <\dev\projects\picsrl\asyn_srl.inc>
+;**********************************************************************
+; Include and configuration directives                                *
+;**********************************************************************
+
+#include <\dev\projects\utility\pic\asyn_srl.inc>
 
 
 ;**********************************************************************
@@ -216,7 +213,7 @@ SerMTx		SerialTx srlIfStat, TXMFLAG, serMTxByt
 #define GOTUSERBANNER
 ; Select to run user code when booted
 #define MONUSERON
-#include <\dev\projects\monitor\pic\pic_mntr.inc>
+#include <\dev\projects\utility\pic\monitor.inc>
 
 
 ;**********************************************************************
