@@ -11,6 +11,10 @@
 ;                   to determine section occupation and aspect to     *
 ;                   display.  Otherwise aspect to display is set by   *
 ;                   a fixed period timer once train has passed.       *
+;                   There is a second serial interface which can be   *
+;                   used to attach a terminal.  The aspect timing     *
+;                   value held in EEPROM can then be adjusted in the  *
+;                   field using the built in Monitor program.         *
 ;                                                                     *
 ;    Author:        Chris White                                       *
 ;    Company:       Monitor Computing Services Ltd.                   *
