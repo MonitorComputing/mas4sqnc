@@ -415,10 +415,10 @@ DETSTATE        EQU     B'00100000' ; Train detector state bit mask
 
 ; Aspect output constants
 ASPPORT         EQU     PORTB       ; Aspect output port
-DOUBLEOUT       EQU     7           ; Second yellow aspect output bit
-GREENOUT        EQU     6           ; Green aspect output bit
-YELLOWOUT       EQU     5           ; Yellow aspect output bit
-REDOUT          EQU     4           ; Red aspect output bit
+DOUBLEOUT       EQU     4           ; Second yellow aspect output bit
+GREENOUT        EQU     5           ; Green aspect output bit
+YELLOWOUT       EQU     6           ; Yellow aspect output bit
+REDOUT          EQU     7           ; Red aspect output bit
 
 
 ;**********************************************************************
@@ -479,6 +479,7 @@ UserBanner
     movlw   'A'
     call    TxLoop
     movlw   'S'
+    movlw   '4'
     movlw   ' '
     call    TxLoop
     movlw   's'
@@ -503,7 +504,7 @@ UserBanner
     call    TxLoop
     movlw   '1'
     call    TxLoop
-    movlw   'a'
+    movlw   'b'
     call    TxLoop
     movlw   crCode
     call    TxLoop
@@ -703,28 +704,28 @@ TimeoutNext
     ; Link to 'next' signal timedout so check status of inhibit input
 
 Inhibit
-    btfss   sigState,INHBIT ; Skip if inhibit state is "On"
-    goto    InhibitOff      ; Jump if state is "Off"
+    btfsc   sigState,INHBIT ; Skip if inhibit state is "Off"
+    goto    InhibitOn       ; Jump if state is "On"
 
-    ; Inhibit state is currently "On"
+    ; Inhibit state is currently "Off"
     movf    inhAcc,W        ; Test if inhibit debounce accumulator ...
-    sublw   INPLOWWTR       ; ... is above "Off" threshold
+    sublw   INPLOWWTR       ; ... is above "On" threshold
     btfss   STATUS,C        ; Skip if at or below threshold ...
     goto    InhibitEnd      ; ... otherwise jump if above threshold
 
-    ; Inhibit input has turned "Off"
-    bcf     sigState,INHBIT ; Set inhibit state to "Off"
+    ; Inhibit input has turned "On"
+    bsf     sigState,INHBIT ; Set inhibit state to "On"
     goto    InhibitEnd
 
-InhibitOff
-    ; Inhibit state is currently "Off"
+InhibitOn
+    ; Inhibit state is currently "On"
     movf    inhAcc,W        ; Test if inhibit debounce accumulator ...
-    sublw   INPHIGHWTR      ; ... is above "On" threshold
+    sublw   INPHIGHWTR      ; ... is above "Off" threshold
     btfsc   STATUS,C        ; Skip if above threshold ...
     goto    InhibitEnd      ; ... otherwise jump if at or below threshold
 
-    ; Inhibit input has turned "On"
-    bsf     sigState,INHBIT ; Set inhibit state to "On"
+    ; Inhibit input has turned "Off"
+    bcf     sigState,INHBIT ; Set inhibit state to "Off"
 
 InhibitEnd
 
