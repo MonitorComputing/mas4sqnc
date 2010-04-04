@@ -22,7 +22,7 @@
 ;                                                                     *
 ;**********************************************************************
 ;                                                                     *
-;    Copyright (C) 2005  Monitor Computing Services Ltd.              *
+;    Copyright (C) 2010  Monitor Computing Services Ltd.              *
 ;                                                                     *
 ;    This program is free software; you can redistribute it and/or    *
 ;    modify it under the terms of the GNU General Public License      *
@@ -155,7 +155,7 @@ serMTxBitCnt    ; Bit down counter
 
             ORG     0x2100  ; EEPROM data area
 
-EEaspectTime    DE  5 + 1   ; Seconds to delay between aspect changes
+EEaspectTime    DE  6 + 1   ; Seconds to delay between aspect changes
 
 
 ;**********************************************************************
@@ -548,8 +548,9 @@ UserInit
     movlw   low EEaspectTime
     call    GetEEPROM
     movwf   aspectTime      ; Initialise aspect interval for 'next' signal
-    movwf   nxtTimer        ; Initialise timer used to simulate 'next' signal
-    movlw   NEXTTIMEOUT   ; Initialise 'next' signal ...
+    clrf    nxtTimer        ; Initialise timer used to simulate 'next' signal
+    incf    nxtTimer,F
+    movlw   NEXTTIMEOUT     ; Initialise 'next' signal ...
     movwf   nxtLnkTmr       ; ... link timeout
 
     clrf    telemData 
@@ -672,7 +673,7 @@ DetectEnd
 
     call    LinkNRx         ; Check for data from 'next' signal
     btfss   STATUS,Z        ; Skip if data received ...
-    goto    TimeoutNext    ; ... otherwise check for link timedout
+    goto    TimeoutNext     ; ... otherwise check for link timedout
 
     ; New data received, decode it
     movwf   telemData       ; Store the received data
@@ -754,6 +755,7 @@ NxtBlkSeqncing
     decfsz  nxtTimer,W      ; Test if signalling timer elapsed ...
     goto    NxtBlkDetect    ; ... otherwise skip signal aspect sequencing
 
+SequenceNxtBlk
     ; Time to simulate 'next' signal changing aspect
     movlw   ASPINCR
     addwf   nxtState,W      ; Increment to 'next' aspect value
@@ -802,6 +804,7 @@ NxtBlkApproach
     ; Load signalling timer to simulate time taken by train to enter the
     ; simulated 'next' signal block.
     movf    aspectTime,W
+    addwf   aspectTime,W
     movwf   nxtTimer
 
 
@@ -839,10 +842,7 @@ NxtBlkOccupied
     iorlw   NEXTSQNCING
     movwf   nxtState
 
-    ; Load signalling timer to simulate time taken by train to leave the
-    ; simulated 'next' signal block.
-    movf    aspectTime,W
-    movwf   nxtTimer
+    goto    SequenceNxtBlk  ; Begin sequencing 'next' signal aspects
 
 NxtBlkEnd   ; End of simulation of 'next' signal.
 
