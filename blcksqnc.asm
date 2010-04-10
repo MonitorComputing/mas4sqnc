@@ -286,10 +286,8 @@ Boot
     movwf   TRISB
 
     ; Set option register:
-    ;   Port B pull-up       - off
     ;   Prescaler assignment - watchdog timer
     clrf    OPTION_REG
-    bsf     OPTION_REG,NOT_RBPU
     bsf     OPTION_REG,PSA
 
     BANKSEL TMR0
@@ -545,8 +543,9 @@ UserInit
     movwf   nxtState
 
     ; Initialise timers
-    movlw   low EEaspectTime
-    call    GetEEPROM
+    ;movlw   low EEaspectTime
+    ;call    GetEEPROM
+    movlw   7
     movwf   aspectTime      ; Initialise aspect interval for 'next' signal
     clrf    nxtTimer        ; Initialise timer used to simulate 'next' signal
     incf    nxtTimer,F
