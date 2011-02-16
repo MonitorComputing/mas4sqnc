@@ -4,7 +4,7 @@
 ;                                                                     *
 ;    Description:   Controller for four aspect colour light signal    *
 ;                   with associated positional train detector after   *
-;                   signal.  Continuosly transmits displayed aspect   *
+;                   signal. Continuosly transmits displayed aspect    *
 ;                   and detector state to 'previous' signal whilst    *
 ;                   listening for same from 'next' signal.            *
 ;                   If data received from 'next' signal this is used  *
@@ -142,8 +142,8 @@ ASPDOUBLE       EQU     B'10000000' ; Double yellow aspect value mask
 INHBIT          EQU     3           ; Inhibit bit in status byte
 INHSTATE        EQU     B'00001000' ; Inhibit state bit mask
 
-DETBIT          EQU     4           ; Train detector bit in status byte
-DETSTATE        EQU     B'00010000' ; Train detector state bit mask
+DETBIT          EQU     5           ; Train detector bit in status byte
+DETSTATE        EQU     B'00100000' ; Train detector state bit mask
 
 ; Aspect output constants
 ASPPORT         EQU     PORTB       ; Aspect output port
