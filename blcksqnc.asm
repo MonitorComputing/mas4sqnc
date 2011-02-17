@@ -85,7 +85,7 @@ INT5KINI    EQU     3           ; Interrupts per initial Rx serial bit @ 5K
 INT2K5BIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
 INT2K5INI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
 
-; 'Next' signal interface constants
+; Next signal interface constants
 RXNFLAG     EQU     0           ; Receive byte buffer 'loaded' status bit
 RXNERR      EQU     1           ; Receive error status bit
 RXNBREAK    EQU     2           ; Received 'break' status bit
@@ -93,7 +93,7 @@ RXNTRIS     EQU     TRISB       ; Rx port direction register
 RXNPORT     EQU     PORTB       ; Rx port data register
 RXNBIT      EQU     1           ; Rx input bit
 
-; 'Previous' signal interface constants
+; Previous signal interface constants
 TXPFLAG     EQU     3           ; Transmit byte buffer 'clear' status bit
 TXPTRIS     EQU     TRISB       ; Tx port direction register
 TXPPORT     EQU     PORTB       ; Tx port data register
@@ -102,10 +102,11 @@ TXPBIT      EQU     2           ; Tx output bit
 ; Timing constants
 INTMILLI        EQU     10 + 1      ; Interrupts per millisecond
 
+SECMILLI        EQU     1000 + 1    ; Milliseconds per second low byte
 SECMILLILOW     EQU     0xE8        ; Milliseconds per second low byte
 SECMILLIHIGH    EQU     0x03        ; Milliseconds per second high byte
 
-NEXTTIMEOUT     EQU     100 + 1     ; 'next' signal link timeout (milliseconds)
+NEXTTIMEOUT     EQU     100 + 1     ; Next signal link timeout (milliseconds)
 
 ; Detector input constants
 DETPORT         EQU     PORTB       ; Detector input port
@@ -127,7 +128,7 @@ TRAINENTERING   EQU     1           ; Train entering block state value
 BLOCKOCCUPIED   EQU     2           ; Block occupied state value
 TRAINLEAVING    EQU     3           ; Train leaving block state value
 
-; State values, 'next' block
+; State values, next block
 NEXTSQNCING     EQU     0           ; Sequencing signal aspects state value
 NEXTAPPRCHING   EQU     1           ; Train approaching block state value
 NEXTENTERING    EQU     2           ; Train entering block state value
@@ -167,13 +168,13 @@ status_isr      ; status register store during ISR
 ; Serial interface
 srlIfStat       ; Serial I/F status flags
 
-; 'Next' signal interface
+; Next signal interface
 serNRxTmr       ; Interrupt counter for serial bit timing
 serNRxReg       ; Data shift register
 serNRxByt       ; Data byte buffer
 serNRxBitCnt    ; Bit down counter
 
-; 'Previous' signal interface
+; Previous signal interface
 serPTxTmr       ; Interrupt counter for serial bit timing
 serPTxReg       ; Data shift register
 serPTxByt       ; Data byte buffer
@@ -203,15 +204,8 @@ sigState        ; Signalling status (for this signal)
                 ;     1 - Yellow
                 ;     0 - Red
 
-nxtState        ; Signalling status received from 'next' signal
-                ;   bits 0,1 - Block simulation state
-                ;     3 - Block occupied
-                ;     2 - Train entering Block
-                ;     1 - Train approaching Block
-                ;     0 - Sequencing signal aspects
-                ;   bit 2 - Unused
-                ;   bit 3 - Unused
-                ;   bit 4 - Unused
+nxtState        ; Signalling status received from next signal
+                ;   bits 0,4 - Unused
                 ;   bit 5 - Detector state
                 ;   bits 6,7 - Aspect value
                 ;     3 - Green
@@ -219,10 +213,10 @@ nxtState        ; Signalling status received from 'next' signal
                 ;     1 - Yellow
                 ;     0 - Red
 
-aspectTime      ; Aspect interval for simulating 'next' signal
-nxtTimer        ; Second counter for simulating 'next' signal
-nxtLnkTmr       ; Millisecond counter for timing out 'next' signal link
-telemData       ; Data received from 'next' or sent to 'previous' signal
+aspectTime      ; Aspect interval for simulating next signal
+nxtTimer        ; Second counter for simulating next signal
+nxtLnkTmr       ; Millisecond counter for timing out next signal link
+telemData       ; Data received from next or sent to previous signal
 
             ENDC
 
@@ -274,8 +268,8 @@ IntVector
     movlw   RTCCINT
     addwf   TMR0,F          ; Reload RTCC
 
-    call    SrvcNRx         ; Perform 'next' signal interface Rx service
-    call    SrvcPTx         ; Perform 'previous' signal interface Tx service
+    call    SrvcNRx         ; Perform next signal interface Rx service
+    call    SrvcPTx         ; Perform previous signal interface Tx service
 
     ; Run interrupt counter for millisecond timing
     decfsz  milliCount,W    ; Decrement millisecond Interrupt counter into W
@@ -325,7 +319,7 @@ EndISR
 
 
 ;**********************************************************************
-; Instance 'next' signal interface routine macros                     *
+; Instance next signal interface routine macros                       *
 ;**********************************************************************
 
 EnableNRx   EnableRx  RXNTRIS, RXNPORT, RXNBIT
@@ -344,7 +338,7 @@ SerNRx      SerialRx srlIfStat, RXNFLAG, serNRxByt
 
 
 ;**********************************************************************
-; Instance 'previous' signal interface routine macros                 *
+; Instance previous signal interface routine macros                   *
 ;**********************************************************************
 
 EnablePTx   EnableTx  TXPTRIS, TXPPORT, TXPBIT
@@ -391,14 +385,14 @@ Boot
     movlw   PORTASTATUS     ; For Port A need to write one to each bit ...
     movwf   PORTA           ; ... being used for input
 
-    ; Initialise 'next' and 'previous' signal serial link
+    ; Initialise next and previous signal serial link
     SerInit    srlIfStat, serPTxTmr, serPTxReg, serPTxByt, serPTxBitCnt, serNRxTmr, serNRxReg, serNRxByt, serNRxBitCnt
 
-    call    EnableNRx       ; Enable receive from 'next' signal
-    call    InitNRx         ; Initialise receiver for 'next' signal
+    call    EnableNRx       ; Enable receive from next signal
+    call    InitNRx         ; Initialise receiver for next signal
 
-    call    EnablePTx       ; Enable transmit to 'previous' signal
-    call    InitPTx         ; Initialise transmitter to 'previous' signal
+    call    EnablePTx       ; Enable transmit to previous signal
+    call    InitPTx         ; Initialise transmitter to previous signal
 
     ; Initialise input debounce accumulators
     clrf    detAcc
@@ -416,19 +410,17 @@ Boot
     movlw   INTMILLI
     movwf   milliCount      ; Initialise millisecond Interrupts counter
 
-    movlw   SECMILLILOW
+    movlw   low SECMILLI
     movwf   secCountLow     ; Initialise one second milliseconds counter low
-    movlw   SECMILLIHIGH
+    movlw   high SECMILLI
     movwf   secCountHigh    ; Initialise one second milliseconds counter high
 
     movlw   low EEaspectTime
     call    GetEEPROM
-    movwf   aspectTime      ; Initialise aspect interval for 'next' signal
+    movwf   aspectTime      ; Initialise aspect interval for next signal
+    movwf   nxtTimer        ; Initialise timer used to simulate next signal
 
-    clrf    nxtTimer        ; Initialise timer used to simulate 'next' signal
-    incf    nxtTimer,F
-
-    movlw   NEXTTIMEOUT     ; Initialise 'next' signal ...
+    movlw   NEXTTIMEOUT     ; Initialise next signal ...
     movwf   nxtLnkTmr       ; ... link timeout
 
     clrf    telemData       ; Clear serial link data store
@@ -440,7 +432,7 @@ Boot
     bsf     INTCON,T0IE     ; Enable RTCC interrupts
     bsf     INTCON,GIE      ; Enable interrupts
 
-Main    ; Top of main processing loop
+Main        ; Top of main processing loop
 
     bsf     INDPORT,USRIND  ; Set user process loop indicator output
 
@@ -460,7 +452,7 @@ Timing
     movlw   INTMILLI        ; Reload millisecond Interrupts counter
     movwf   milliCount
 
-    decfsz  nxtLnkTmr,W     ; Decrement 'next' signal link timeout timer into W
+    decfsz  nxtLnkTmr,W     ; Decrement next signal link timeout timer into W
     movwf   nxtLnkTmr       ; If result is not zero update the timer
 
     decfsz  secCountLow,F   ; Decrement seconds counter low byte ...
@@ -468,12 +460,12 @@ Timing
     decfsz  secCountHigh,F  ; Decrement second counter high byte ...
     goto    TimingEnd       ; ... skipping this jump if it has reached zero
 
-    movlw   SECMILLILOW     ; Reload one second ...
+    movlw   low SECMILLI    ; Reload one second ...
     movwf   secCountLow     ; ... milliseconds counter low byte
-    movlw   SECMILLIHIGH    ; Reload one second ...
+    movlw   high SECMILLI   ; Reload one second ...
     movwf   secCountHigh    ; ... milliseconds counter high byte
 
-    decfsz  nxtTimer,W      ; Decrement 'next' signal simulation timer into W
+    decfsz  nxtTimer,W      ; Decrement next signal simulation timer into W
     movwf   nxtTimer        ; If result is not zero update the timer
 
 TimingEnd
@@ -506,9 +498,9 @@ DetectOff
 
 DetectEnd
 
-    ; Look for status received from 'next' signal
+    ; Look for status received from next signal
 
-    call    LinkNRx         ; Check for data from 'next' signal
+    call    LinkNRx         ; Check for data from next signal
     btfss   STATUS,Z        ; Skip if data received ...
     goto    TimeoutNext     ; ... otherwise check for link timedout
 
@@ -522,24 +514,24 @@ DetectEnd
 
     comf    telemData,W     ; Store (original) received data ...
     andlw   ~BLKSTATE       ; ... (with simulation state ...
-    iorlw   NEXTSQNCING   ; ...  set to 'sequence aspects') ...
-    movwf   nxtState        ; ... as 'next' signal status
+    iorlw   NEXTSQNCING     ; ...  set to 'sequence aspects') ...
+    movwf   nxtState        ; ... as next signal status
 
-    movlw   NEXTTIMEOUT   ; Reset 'next' signal ...
+    movlw   NEXTTIMEOUT     ; Reset next signal ...
     movwf   nxtLnkTmr       ; ... link timeout
 
-    ; If 'next' signal link is not timed out then ignore inhibit input
+    ; If next signal link is not timed out then ignore inhibit input
     bcf     sigState,INHBIT ; Set inhibit state to "Off"
 
     goto    NxtBlkEnd
 
-    ; Test if 'next' signal link has timedout, i.e. there is no 'next' signal
+    ; Test if next signal link has timedout, i.e. there is no next signal
 
 TimeoutNext
     decfsz  nxtLnkTmr,W     ; Skip if link timeout elapsed ...
     goto    NxtBlkEnd       ; ... otherwise keep waiting for data
 
-    ; Link to 'next' signal timedout so check status of inhibit input
+    ; Link to next signal timedout so check status of inhibit input
 
 Inhibit
     btfsc   sigState,INHBIT ; Skip if inhibit state is "Off"
@@ -567,126 +559,35 @@ InhibitOn
 
 InhibitEnd
 
-    ; Link to 'next' signal timedout so simulate 'next' signal
-
-    movlw   high NxtBlkTable    ; Load jump table address high byte ...
-    movwf   PCLATH              ; ... into PCLATH to jump in same code block
-    movf    nxtState,W          ; Use current state value ...
-    andlw   BLKSTATE
-    addwf   PCL,F               ; ... as offset into state jump table
-
-NxtBlkTable
-    goto    NxtBlkSeqncing      ; State 0 - Sequencing signal aspects
-    goto    NxtBlkApproach      ; State 1 - Train approaching
-    goto    NxtBlkEntering      ; State 2 - Train entering block
-    goto    NxtBlkOccupied      ; State 3 - Block occupied
-
-#if (high NxtBlkTable) != (high $)
-    error "'Next' signal block state jump table split across page boundary"
-#endif
-
-
-NxtBlkSeqncing
-    ; Simulated 'next' signal state = "Sequencing signal aspects".
+    ; Link to next signal timedout so simulate next signal
 
     decfsz  nxtTimer,W      ; Test if signalling timer elapsed ...
-    goto    NxtBlkDetect    ; ... otherwise skip signal aspect sequencing
+    goto    NxtBlkEnd       ; ... otherwise skip next signal sequencing
+
+    btfss   nxtState,DETBIT ; Skip if next detector "On" ...
+    goto    SequenceNxtBlk  ; ... sequence next signal aspect
+
+    bcf     nxtState,DETBIT ; Set simulated next signal train detector "Off"
+    goto    DelayNxtBlk
 
 SequenceNxtBlk
-    ; Time to simulate 'next' signal changing aspect
+    ; Time to simulate next signal changing aspect
     movlw   ASPINCR
-    addwf   nxtState,W      ; Increment to 'next' aspect value
+    addwf   nxtState,W      ; Increment to next aspect value
     btfss   STATUS,C        ; Skip if overflow, already showing 'green' ...
     movwf   nxtState        ; ... otherwise store new aspect value
 
+DelayNxtBlk
     ; Load signalling timer for the duration of the new aspect
     movf    aspectTime,W
     movwf   nxtTimer
 
-NxtBlkDetect
-    ; Test the state of the train detector for this signal.  If "On" set the
-    ; state of the simulated 'next' signal to "Train approaching".  This is
-    ; done in order to simulate the train traversing the signal block and
-    ; eventually passing the 'next' signal.
-
-    btfss   sigState,DETBIT ; Skip if detector "On" ...
-    goto    NxtBlkEnd       ; ... otherwise remain in current state
-
-    ; Train detected, set simulated 'next' signal state to "Train approaching"
-    movlw   ~BLKSTATE
-    andwf   nxtState,W
-    iorlw   NEXTAPPRCHING
-    movwf   nxtState
-
-
-NxtBlkApproach
-    ; Simulated 'next' signal state = "Train approaching".
-
-    ; Test the state of the train detector for this signal.  If "Off" set the
-    ; state of the simulated 'next' signal to "Train entering block".  This is
-    ; done in order to simulate the train traversing the 'next' signal block.
-
-    btfsc   sigState,DETBIT ; Skip if detector "Off" ...
-    goto    NxtBlkEnd       ; ... otherwise remain in current state
-
-    ; Train no longer detected, set simulated 'next' signal state to
-    ; "Train entering block" (also 'next' signal aspect value to "Red").
-    movlw   ~(BLKSTATE | ASPSTATE)
-    andwf   nxtState,W
-    iorlw   NEXTENTERING
-    movwf   nxtState
-
-    bsf     nxtState,DETBIT ; Set simulated 'next' signal train detector "On"
-
-    ; Load signalling timer to simulate time taken by train to enter the
-    ; simulated 'next' signal block.
-    movf    aspectTime,W
-    addwf   aspectTime,W
-    movwf   nxtTimer
-
-
-NxtBlkEntering
-    ; Simulated 'next' signal state = "Train entering block".
-
-    decfsz  nxtTimer,W      ; Test if signalling timer elapsed ...
-    goto    NxtBlkEnd       ; ... otherwise remain in current state
-
-    ; Train has entered the simulated 'next' signal block, set simulated
-    ; 'next' signal state to "Block occupied".
-    movlw   ~BLKSTATE
-    andwf   nxtState,W
-    iorlw   NEXTOCCUPIED
-    movwf   nxtState
-
-    bcf     nxtState,DETBIT ; Set simulated 'next' signal train detector "Off"
-
-    ; Load signalling timer to simulate time taken by train to traverse the
-    ; simulated 'next' signal block.
-    movf    aspectTime,W
-    movwf   nxtTimer
-
-
-NxtBlkOccupied
-    ; Simulated 'next' signal state = "Block occupied".
-
-    decfsz  nxtTimer,W      ; Test if signalling timer elapsed ...
-    goto    NxtBlkEnd       ; ... otherwise remain in current state
-
-    ; Train has traversed the simulated 'next' signal block, set simulated
-    ; 'next' signal state to "Sequencing signal aspects".
-    movlw   ~BLKSTATE
-    andwf   nxtState,W
-    iorlw   NEXTSQNCING
-    movwf   nxtState
-
-    goto    SequenceNxtBlk  ; Begin sequencing 'next' signal aspects
-
-NxtBlkEnd   ; End of simulation of 'next' signal.
+NxtBlkEnd   ; End of simulation of next signal.
 
 
     ; Run this signal block state machine
     ; The signal aspect to display and exit of a train from the signal block
-    ; are dependant on the aspect, and train detector state, of the 'next'
+    ; are dependant on the aspect, and train detector state, of the next
     ; signal but for the purpose of this signal it doesn't matter if these have
     ; been received or simulated.
 
@@ -711,7 +612,7 @@ BlockClear
     ; State = "Block clear".
 
     ; Set signal aspect, this signals aspect value (if not Red) depends on the
-    ; aspect value of the 'next' signal such that:
+    ; aspect value of the next signal such that:
     ; 'Next'     ->    'This'
     ; Red              Yellow
     ; Yellow           Double Yellow
@@ -721,9 +622,9 @@ BlockClear
     movlw   ~ASPSTATE
     andwf   sigState,F      ; Clear current aspect value bits
     movlw   ASPINCR
-    addwf   nxtState,W      ; Increment 'next' signal aspect value into W
+    addwf   nxtState,W      ; Increment next signal aspect value into W
     btfsc   STATUS,C        ; Skip if no overflow ...
-    iorlw   ASPGREEN        ; ... otherwise set for green aspect
+    movlw   ASPGREEN        ; ... otherwise set for green aspect
     andlw   ASPSTATE        ; Isolate new aspect value bits   
     iorwf   sigState,F      ; Set new aspect value
 
@@ -756,11 +657,25 @@ TrainEntering
     iorlw   BLOCKOCCUPIED
     movwf   sigState
 
+    decfsz  nxtLnkTmr,W     ; Skip if link timeout elapsed ...
+    goto    BlockOccupied   ; ... otherwise skip simulation of next signal
+
+    ; Link to next signal timedout so simulate next signal
+
+    movlw   ~ASPSTATE
+    andwf   nxtState,F      ; Clear next signal aspect value bits (= red)
+    bsf     nxtState,DETBIT ; Set simulated next signal train detector "On"
+
+    ; Load signalling timer to simulate time taken by train to traverse the
+    ; simulated next signal block
+    movf    aspectTime,W
+    movwf   nxtTimer
+
 
 BlockOccupied
     ; State = "Block occupied".
 
-    btfss   nxtState,DETBIT ; Skip if 'next' detector "On" ...
+    btfss   nxtState,DETBIT ; Skip if next detector "On" ...
     goto    BlockEnd        ; ... otherwise remain in current state
 
     ; Train detected at block exit, set signal state to "Train leaving block".
@@ -773,7 +688,7 @@ BlockOccupied
 TrainLeaving
     ; State ="Train leaving block".
 
-    btfsc   nxtState,DETBIT   ; Skip if 'next' detector "Off" ...
+    btfsc   nxtState,DETBIT   ; Skip if next detector "Off" ...
     goto    BlockEnd          ; ... otherwise remain in current state
 
     ; Train no longer detected at block exit, set signal state to "Block
@@ -835,7 +750,7 @@ RedAspect
 
 AspectEnd   ; End of aspect display output
 
-    ; Send status to 'previous' signal
+    ; Send status to previous signal
 
     ; Encode status
     swapf   sigState,W      ; Copy status but with nibbles swapped
@@ -857,11 +772,11 @@ AspectEnd   ; End of aspect display output
     iorwf   telemData,W     ; Combine complemented and uncomplemented data
 
     movwf   FSR
-    call    LinkPTx         ; Send data to 'previous' signal
+    call    LinkPTx         ; Send data to previous signal
 
     bcf     INDPORT,USRIND  ; Clear user process loop indicator output
 
-    goto Main  ; End of main processing loop
+    goto    Main            ; End of main processing loop
 
 
 ;**********************************************************************
