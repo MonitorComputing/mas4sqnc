@@ -126,7 +126,7 @@ INHBIT          EQU     1       ; Inhibit input bit (active low)
 
 ; Special speed input constants
 SPDPORT         EQU     PORTB   ; Special speed input port
-SPDBIT          EQU     3       ; Special speed input bit
+SPDBIT          EQU     3       ; Special speed input bit (active low)
 
 INPHIGHWTR      EQU     B'11111000' ; Input debounce on threshold mask
 
@@ -148,8 +148,8 @@ ASPDOUBLE       EQU     B'10000000' ; Double yellow aspect value mask
 INHFLG          EQU     3           ; Inhibit bit in status byte
 INHSTATE        EQU     B'00001000' ; Inhibit state bit mask
 
-SPDFLG          EQU     4           ; Speed bit in status byte
-SPDSTATE        EQU     B'00010000' ; Speed state bit mask
+SPDFLG          EQU     4           ; Special speed bit in status byte
+SPDSTATE        EQU     B'00010000' ; Special speed state bit mask
 
 DETFLG          EQU     5           ; Train detection bit in status byte
 DETSTATE        EQU     B'00100000' ; Train detection state bit mask
@@ -457,9 +457,9 @@ Boot
     incf    snsAcc,F        ; Prevent rollover down through zero
     clrf    detAcc          ; Initialise detection input for no train detected
     decf    detAcc,F        ; Rollover through zero to 'full house'
-    clrf    inhAcc          ; Initialise inhibit input for 'free run'
+    clrf    inhAcc          ; Initialise inhibit input for automatic free run
     decf    inhAcc,F        ; Rollover through zero to 'full house'
-    clrf    spdAcc          ; Initialise speed input for 'normal speed'
+    clrf    spdAcc          ; Initialise special speed input for normal
     decf    spdAcc,F        ; Rollover through zero to 'full house'
 
     movlw   ASPGREEN
@@ -551,83 +551,57 @@ IndicatorIsOff
 
 EndDetector
 
-    ; Check status of train detection input
-
-    ; Debounce train detection input
+    ; Check status of train detection input (active low)
 
     btfss   DETPORT,DETBIT  ; Skip if train detection input is set ...
     goto    DecDetAcc       ; ... else jump if not set
 
-    incfsz  detAcc,W        ; Increment train detection accumulator into W
-    movwf   detAcc          ; If result is not zero update the accumulator
-    goto    DetDbncEnd   
+    incf    detAcc,W        ; Increment train detection accumulator
+    btfsc   STATUS,Z        ; Skip if not rolled over to zero ...
+    goto    DetectEnd       ; ... else do nothing
+    
+    movwf   detAcc          ; Update the train detection accumulator
+
+    andlw   INPHIGHWTR      ; Test if above off threshold
+    btfss   STATUS,Z        ; Skip if not above off threshold ...
+    bcf     sigState,DETFLG ; ... else set detection state to off
+    goto    DetectEnd    
 
 DecDetAcc
-    decfsz  detAcc,W        ; Decrement train detection accumulator into W
-    movwf   detAcc          ; If result is not zero update the accumulator
+    decf    detAcc,W        ; Decrement train detection accumulator
 
-DetDbncEnd
+    btfss   STATUS,Z        ; Skip if reached zero ...
+    movwf   detAcc          ; ... else update the accumulator
 
-Detect
-    btfsc   sigState,DETFLG ; Skip if detection state is off ...
-    goto    DetectOn        ; ... else jump if detection state is on
-
-    ; Train detection state is currently off
-    decf    detAcc,W        ; Test train detection debounce accumulator
     btfsc   STATUS,Z        ; Skip if above on threshold ...
-
-    ; Train detection input has turned on
     bsf     sigState,DETFLG ; ... else set train detection state to on
-    goto    DetectEnd
-
-DetectOn
-    ; Train detection state is currently on
-    movf    detAcc,W        ; Test if train detection debounce accumulator ...
-    andlw   INPHIGHWTR      ; ... is above off threshold
-    btfss   STATUS,Z        ; Skip if at or below off threshold ...
-
-    ; Train detection input has turned off
-    bcf     sigState,DETFLG ; ... else set detection state to off
 
 DetectEnd
 
-    ; Check status of 'Normal Speed' input
+    ; Check status of special speed input (active low)
 
-    ; Debounce speed input
-
-    btfss   SPDPORT,SPDBIT  ; Skip if speed input is set ...
+    btfss   SPDPORT,SPDBIT  ; Skip if special speed input is set ...
     goto    DecSpdAcc       ; ... else jump if not set
 
-    incfsz  spdAcc,W        ; Increment speed input accumulator into W
-    movwf   spdAcc          ; If result is not zero update the accumulator
-    goto    SpdDbncEnd   
+    incf  spdAcc,W          ; Increment special speed input accumulator
+    btfsc   STATUS,Z        ; Skip if not rolled over to zero ...
+    goto    SpeedEnd        ; ... else do nothing
+    
+    movwf   spdAcc          ; Update special speed input accumulator
+
+    andlw   INPHIGHWTR      ; Test if above off threshold
+    btfss   STATUS,Z        ; Skip if not above off threshold ...
+    bcf     sigState,SPDFLG ; ... else set speed state to normal
+    goto    SpeedEnd   
 
 DecSpdAcc
-    decfsz  spdAcc,W        ; Decrement speed input accumulator into W
-    movwf   spdAcc          ; If result is not zero update the accumulator
+    decf  spdAcc,W          ; Decrement speed input accumulator
 
-SpdDbncEnd
+    btfss   STATUS,Z        ; Skip if reached zero ...
+    movwf   spdAcc          ; ... else update the accumulator
 
-Speed
-    btfsc   sigState,SPDFLG ; Skip if speed state is normal ...
-    goto    SpeedSpecial    ; ... else jump if state is special
-
-    ; Speed state is currently normal
-    decf    spdAcc,W        ; Test speed debounce accumulator
     btfsc   STATUS,Z        ; Skip if above on threshold ...
-
-    ; Speed input has turned special
-    bcf     sigState,SPDFLG ; ... else set train speed state to special
-    goto    SpeedEnd
-
-SpeedSpecial
-    ; Speed state is currently special
-    movf    spdAcc,W        ; Test if speed debounce accumulator ...
-    andlw   INPHIGHWTR      ; ... is above off threshold
-    btfss   STATUS,Z        ; Skip if at or below off threshold ...
-
-    ; Speed input has turned normal
-    bsf     sigState,SPDFLG ; ... else set speed state to normal
+    bsf     sigState,SPDFLG ; ... else set speed state to special
 
 SpeedEnd
 
@@ -664,43 +638,30 @@ TimeoutNext
     decfsz  nxtLnkTmr,W     ; Skip if link timeout elapsed ...
     goto    NxtBlkEnd       ; ... else keep waiting for data
 
-    ; Link to next signal timedout so check status of inhibit input
-
-    ; Debounce inhibit input
+    ; Next signal link timed out, check status of inhibit input (active low)
 
     btfss   INHPORT,INHBIT  ; Skip if inhibit input is set ...
     goto    DecInhAcc       ; ... else jump if not set
 
-    incfsz  inhAcc,W        ; Increment inhibit input accumulator into W
-    movwf   inhAcc          ; If result is not zero update the accumulator
-    goto    InhDbncEnd   
+    incf    inhAcc,W        ; Increment inhibit input accumulator
+    btfsc   STATUS,Z        ; Skip if not rolled over to zero ...
+    goto    InhibitEnd      ; ... else do nothing
+    
+    movwf   inhAcc          ; Update inhibit input accumulator
+
+    andlw   INPHIGHWTR      ; Test if above off threshold
+    btfss   STATUS,Z        ; Skip if not above off threshold ...
+    bcf     sigState,INHFLG ; ... else set inhibit state to off
+    goto    InhibitEnd   
 
 DecInhAcc
-    decfsz  inhAcc,W        ; Decrement inhibit input accumulator into W
-    movwf   inhAcc          ; If result is not zero update the accumulator
+    decf    inhAcc,W        ; Decrement inhibit input accumulator
 
-InhDbncEnd
+    btfss   STATUS,Z        ; Skip if reached zero ...
+    movwf   inhAcc          ; ... else  update the accumulator
 
-Inhibit
-    btfsc   sigState,INHFLG ; Skip if inhibit state is off ...
-    goto    InhibitOn       ; ... else jump if inhibit state is on
-
-    ; Inhibit state is currently off
-    decf    inhAcc,W        ; Test inhibit debounce accumulator
     btfsc   STATUS,Z        ; Skip if above on threshold ...
-
-    ; Inhibit input has turned on
     bsf     sigState,INHFLG ; ... else set inhibit state to on
-    goto    InhibitEnd
-
-InhibitOn
-    ; Inhibit state is currently on
-    movf    inhAcc,W        ; Test if inhibit debounce accumulator ...
-    andlw   INPHIGHWTR      ; ... is above off threshold
-    btfss   STATUS,Z        ; Skip if above threshold ...
-
-    ; Inhibit input has turned off
-    bcf     sigState,INHFLG ; ... else set inhibit state to off
 
 InhibitEnd
 
