@@ -63,6 +63,7 @@
 
 ; Include serial interface macros
 #include <\dev\projects\utility\pic\asyn_srl.inc>
+#include <\dev\projects\utility\pic\link_hd.inc>
 
 
 ;**********************************************************************
@@ -76,10 +77,9 @@ PORTBSTATUS EQU     B'00001011'
 ; Interrupt & timing constants
 RTCCINT     EQU     158         ; 10KHz = (1MHz / 100) - RTCC write inhibit (2)
 
-INT5KBIT    EQU     2           ; Interrupts per serial bit @ 5K baud
-INT5KINI    EQU     3           ; Interrupts per initial Rx serial bit @ 5K
-INT2K5BIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
-INT2K5INI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
+INTSERBIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
+INTSERINI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
+INTLINKDEL  EQU     0           ; Interrupt cycles for link turnaround delays
 
 ; Next signal interface constants
 RXNFLAG     EQU     0           ; Receive byte buffer 'loaded' status bit
@@ -88,8 +88,18 @@ RXNBREAK    EQU     2           ; Received 'break' status bit
 RXNTRIS     EQU     TRISB       ; Rx port direction register
 RXNPORT     EQU     PORTB       ; Rx port data register
 RXNBIT      EQU     1           ; Rx input bit
+TXNFLAG     EQU     0           ; Transmit byte buffer 'clear' status bit
+TXNTRIS     EQU     TRISA       ; Tx port direction register
+TXNPORT     EQU     PORTA       ; Tx port data register
+TXNBIT      EQU     1           ; Tx output bit
 
 ; Previous signal interface constants
+RXPFLAG     EQU     3           ; Receive byte buffer 'loaded' status bit
+RXPERR      EQU     4           ; Receive error status bit
+RXPBREAK    EQU     5           ; Received 'break' status bit
+RXPTRIS     EQU     TRISB       ; Rx port direction register
+RXPPORT     EQU     PORTB       ; Rx port data register
+RXPBIT      EQU     2           ; Rx input bit
 TXPFLAG     EQU     3           ; Transmit byte buffer 'clear' status bit
 TXPTRIS     EQU     TRISB       ; Tx port direction register
 TXPPORT     EQU     PORTB       ; Tx port data register
@@ -174,16 +184,18 @@ status_isr      ; status register store during ISR
 srlIfStat       ; Serial I/F status flags
 
 ; Next signal interface
-serNRxTmr       ; Interrupt counter for serial bit timing
-serNRxReg       ; Data shift register
-serNRxByt       ; Data byte buffer
-serNRxBitCnt    ; Bit down counter
+serNTmr         ; Interrupt counter for serial bit timing
+serNReg         ; Data shift register
+serNByt         ; Data byte buffer
+serNBitCnt      ; Bit down counter
+lnkNState       ; Link state register
 
 ; Previous signal interface
-serPTxTmr       ; Interrupt counter for serial bit timing
-serPTxReg       ; Data shift register
-serPTxByt       ; Data byte buffer
-serPTxBitCnt    ; Bit down counter
+serPTmr         ; Interrupt counter for serial bit timing
+serPReg         ; Data shift register
+serPByt         ; Data byte buffer
+serPBitCnt      ; Bit down counter
+lnkPState       ; Link state register
 
 milliCount      ; Interrupt counter for millisecond timing
 
@@ -275,8 +287,8 @@ IntVector
     movlw   RTCCINT
     addwf   TMR0,F          ; Reload RTCC
 
-    call    SrvcNRx         ; Perform next signal interface Rx service
-    call    SrvcPTx         ; Perform previous signal interface Tx service
+	call    SrvcLinkN       ; Service next signal link
+	call    SrvcLinkP       ; Service previous signal link
 
     ; Run interrupt counter for millisecond timing
     decfsz  milliCount,W    ; Decrement millisecond Interrupt counter into W
@@ -328,51 +340,6 @@ EmitterOffEnd
 
 SnsChkEnd
 
-    ; Debounce train detection input
-
-    btfss   DETPORT,DETBIT  ; Skip if train detection input is set ...
-    goto    DecDetAcc       ; ... otherwise jump if not set
-
-    incfsz  detAcc,W        ; Increment train detection accumulator into W
-    movwf   detAcc          ; If result is not zero update the accumulator
-    goto    DetDbncEnd   
-
-DecDetAcc
-    decfsz  detAcc,W        ; Decrement train detection accumulator into W
-    movwf   detAcc          ; If result is not zero update the accumulator
-
-DetDbncEnd
-
-    ; Debounce inhibit input
-
-    btfss   INHPORT,INHBIT  ; Skip if inhibit input is set ...
-    goto    DecInhAcc       ; ... otherwise jump if not set
-
-    incfsz  inhAcc,W        ; Increment inhibit input accumulator into W
-    movwf   inhAcc          ; If result is not zero update the accumulator
-    goto    InhDbncEnd   
-
-DecInhAcc
-    decfsz  inhAcc,W        ; Decrement inhibit input accumulator into W
-    movwf   inhAcc          ; If result is not zero update the accumulator
-
-InhDbncEnd
-
-    ; Debounce speed input
-
-    btfss   SPDPORT,SPDBIT  ; Skip if speed input is set ...
-    goto    DecSpdAcc       ; ... otherwise jump if not set
-
-    incfsz  spdAcc,W        ; Increment speed input accumulator into W
-    movwf   spdAcc          ; If result is not zero update the accumulator
-    goto    SpdDbncEnd   
-
-DecSpdAcc
-    decfsz  spdAcc,W        ; Decrement speed input accumulator into W
-    movwf   spdAcc          ; If result is not zero update the accumulator
-
-SpdDbncEnd
-
 EndISR
     movf    pclath_isr,W    ; Retrieve copy of PCLATH register
     movwf   PCLATH          ; Restore pre-isr PCLATH register contents
@@ -388,38 +355,62 @@ EndISR
 ; Instance next signal interface routine macros                       *
 ;**********************************************************************
 
-EnableNRx   EnableRx  RXNTRIS, RXNPORT, RXNBIT
+EnableRxN   EnableRx  RXNTRIS, RXNPORT, RXNBIT
     return
 
-
-InitNRx     InitRx  serNRxTmr, srlIfStat, RXNFLAG, RXNERR, RXNBREAK
+InitRxN     InitRx  serNTmr, srlIfStat, RXNFLAG, RXNERR, RXNBREAK
     return
 
+SrvcRxN     ServiceRx serNTmr, RXNPORT, RXNBIT, serNBitCnt, INTSERINI, srlIfStat, RXNERR, RXNBREAK, serNReg, serNByt, RXNFLAG, INTSERBIT
 
-SrvcNRx     ServiceRx serNRxTmr, RXNPORT, RXNBIT, serNRxBitCnt, INT2K5INI, srlIfStat, RXNERR, RXNBREAK, serNRxReg, serNRxByt, RXNFLAG, INT2K5BIT
+SerRxN      SerialRx srlIfStat, RXNFLAG, serNByt
 
+EnableTxN   EnableTx  TXNTRIS, TXNPORT, TXNBIT
+    return
 
-LinkNRx
-SerNRx      SerialRx srlIfStat, RXNFLAG, serNRxByt
+InitTxN     InitTx  serNTmr, srlIfStat, TXNFLAG
+    return
+
+SrvcTxN     ServiceTx serNTmr, srlIfStat, serNByt, serNReg, TXNFLAG, serNBitCnt, INTSERBIT, TXPPORT, TXPBIT, RXNPORT, RXNBIT
+
+SerTxN      SerialTx srlIfStat, TXNFLAG, serNByt
+
+LinkRxN		LinkRx lnkNState, SerRxN
+
+LinkTxN		LinkTx lnkNState, SerTxN
+
+SrvcLinkN	SrvcLink   SrvcRxN, SrvcTxN, lnkNState, INTLINKDEL, serNTmr, EnableTxN, InitTxN, EnableRxN, InitRxN
 
 
 ;**********************************************************************
 ; Instance previous signal interface routine macros                   *
 ;**********************************************************************
 
-EnablePTx   EnableTx  TXPTRIS, TXPPORT, TXPBIT
+EnableRxP   EnableRx  RXPTRIS, RXPPORT, RXPBIT
     return
 
-
-InitPTx     InitTx  serPTxTmr, srlIfStat, TXPFLAG
+InitRxP     InitRx  serPTmr, srlIfStat, RXPFLAG, RXPERR, RXPBREAK
     return
 
+SrvcRxP     ServiceRx serPTmr, RXPPORT, RXPBIT, serPBitCnt, INTSERINI, srlIfStat, RXPERR, RXPBREAK, serPReg, serPByt, RXPFLAG, INTSERBIT
 
-SrvcPTx     ServiceTx serPTxTmr, srlIfStat, serPTxByt, serPTxReg, TXPFLAG, serPTxBitCnt, INT2K5BIT, TXPPORT, TXPBIT, 0, 0
+SerRxP      SerialRx srlIfStat, RXPFLAG, serPByt
 
+EnableTxP   EnableTx  TXPTRIS, TXPPORT, TXPBIT
+    return
 
-LinkPTx
-SerPTx      SerialTx srlIfStat, TXPFLAG, serPTxByt
+InitTxP     InitTx  serPTmr, srlIfStat, TXPFLAG
+    return
+
+SrvcTxP     ServiceTx serPTmr, srlIfStat, serPByt, serPReg, TXPFLAG, serPBitCnt, INTSERBIT, TXPPORT, TXPBIT, RXPPORT, RXPBIT
+
+SerTxP      SerialTx srlIfStat, TXPFLAG, serPByt
+
+LinkRxP		LinkRx lnkPState, SerRxP
+
+LinkTxP		LinkTx lnkPState, SerTxP
+
+SrvcLinkP	SrvcLink   SrvcRxP, SrvcTxP, lnkPState, INTLINKDEL, serPTmr, EnableTxP, InitTxP, EnableRxP, InitRxP
 
 
 ;**********************************************************************
@@ -454,14 +445,21 @@ Boot
     bsf     EMTPORT,EMTBIT  ; Ensure detector emmitter is off
     bsf     INDPORT,INDBIT  ; Ensure detector indicator is off
 
-    ; Initialise next and previous signal serial link
-    SerInit    srlIfStat, serPTxTmr, serPTxReg, serPTxByt, serPTxBitCnt, serNRxTmr, serNRxReg, serNRxByt, serNRxBitCnt
+    ; Initialise next singla link
+    SerInit    srlIfStat, serNTmr, serNReg, serNByt, serNBitCnt, serNTmr, serNReg, serNByt, serNBitCnt
 
-    call    EnableNRx       ; Enable receive from next signal
-    call    InitNRx         ; Initialise receiver for next signal
+    ; Initialise next signal link to receive
+    movlw   SWITCH2RXSTATE
+    movwf   lnkNState
+    call    SrvcLinkN
 
-    call    EnablePTx       ; Enable transmit to previous signal
-    call    InitPTx         ; Initialise transmitter to previous signal
+    ; Initialise previous signal link
+    SerInit    srlIfStat, serPTmr, serPReg, serPByt, serPBitCnt, serPTmr, serPReg, serPByt, serPBitCnt
+
+    ; Initialise previous signal link to transmit
+    movlw   SWITCH2TXSTATE
+    movwf   lnkPState
+    call    SrvcLinkP
 
     ; Initialise input debounce accumulators
     clrf    snsAcc          ; Initialise sensor for clear
@@ -570,6 +568,21 @@ EndDetector
 
     ; Check status of train detection input
 
+    ; Debounce train detection input
+
+    btfss   DETPORT,DETBIT  ; Skip if train detection input is set ...
+    goto    DecDetAcc       ; ... otherwise jump if not set
+
+    incfsz  detAcc,W        ; Increment train detection accumulator into W
+    movwf   detAcc          ; If result is not zero update the accumulator
+    goto    DetDbncEnd   
+
+DecDetAcc
+    decfsz  detAcc,W        ; Decrement train detection accumulator into W
+    movwf   detAcc          ; If result is not zero update the accumulator
+
+DetDbncEnd
+
 Detect
     btfsc   sigState,DETFLG ; Skip if detection state is "Off" ...
     goto    DetectOn        ; ... otherwise jump if state is "On"
@@ -597,6 +610,21 @@ DetectOn
 DetectEnd
 
     ; Check status of 'Normal Speed' input
+
+    ; Debounce speed input
+
+    btfss   SPDPORT,SPDBIT  ; Skip if speed input is set ...
+    goto    DecSpdAcc       ; ... otherwise jump if not set
+
+    incfsz  spdAcc,W        ; Increment speed input accumulator into W
+    movwf   spdAcc          ; If result is not zero update the accumulator
+    goto    SpdDbncEnd   
+
+DecSpdAcc
+    decfsz  spdAcc,W        ; Decrement speed input accumulator into W
+    movwf   spdAcc          ; If result is not zero update the accumulator
+
+SpdDbncEnd
 
 Speed
     btfss   sigState,SPDFLG ; Skip if speed state is 'Normal' ...
@@ -626,7 +654,7 @@ SpeedEnd
 
     ; Look for status received from next signal
 
-    call    LinkNRx         ; Check for data from next signal
+    call    LinkRxN         ; Check for data from next signal
     btfss   STATUS,Z        ; Skip if data received ...
     goto    TimeoutNext     ; ... otherwise check for link timedout
 
@@ -646,6 +674,8 @@ SpeedEnd
 
     ; If next signal link is not timed out then ignore inhibit input
     bcf     sigState,INHFLG ; Set inhibit state to "Off"
+    movlw   0xFF
+    movwf   inhAcc          ; Reset inhibit input debounce
 
     goto    NxtBlkEnd
 
@@ -656,6 +686,21 @@ TimeoutNext
     goto    NxtBlkEnd       ; ... otherwise keep waiting for data
 
     ; Link to next signal timedout so check status of inhibit input
+
+    ; Debounce inhibit input
+
+    btfss   INHPORT,INHBIT  ; Skip if inhibit input is set ...
+    goto    DecInhAcc       ; ... otherwise jump if not set
+
+    incfsz  inhAcc,W        ; Increment inhibit input accumulator into W
+    movwf   inhAcc          ; If result is not zero update the accumulator
+    goto    InhDbncEnd   
+
+DecInhAcc
+    decfsz  inhAcc,W        ; Decrement inhibit input accumulator into W
+    movwf   inhAcc          ; If result is not zero update the accumulator
+
+InhDbncEnd
 
 Inhibit
     btfsc   sigState,INHFLG ; Skip if inhibit state is "Off"
@@ -896,7 +941,7 @@ AspectEnd   ; End of aspect display output
     iorwf   telemData,W     ; Combine complemented and uncomplemented data
 
     movwf   FSR
-    call    LinkPTx         ; Send data to previous signal
+    call    LinkTxP         ; Send data to previous signal
 
     goto    Main            ; End of main processing loop
 
