@@ -106,36 +106,33 @@ TXPPORT     EQU     PORTB       ; Tx port data register
 TXPBIT      EQU     2           ; Tx output bit
 
 ; Timing constants
-INTMILLI        EQU     10 + 1      ; Interrupts per millisecond
+INTCENTI    EQU     100 + 1     ; Interrupts per centisecond
+SECCENTI    EQU     100         ; Centiseconds per second
 
-SECMILLI        EQU     1000 + 1    ; Milliseconds per second low byte
-SECMILLILOW     EQU     0xE8        ; Milliseconds per second low byte
-SECMILLIHIGH    EQU     0x03        ; Milliseconds per second high byte
-
-NEXTTIMEOUT     EQU     100 + 1     ; Next signal link timeout (milliseconds)
+NEXTTIMEOUT     EQU     10 + 1  ; Next signal link timeout (centiseconds)
 
 ; Detector I/O constants
-EMTPORT         EQU     PORTA       ; Emitter drive port
-EMTBIT          EQU     2           ; Emmitter drive bit (active low)
-SNSPORT         EQU     PORTA       ; Sensor input port
-SNSBIT          EQU     3           ; Sensor input bit (active high)
-INDPORT         EQU     PORTA       ; Detection indicator port
-INDBIT          EQU     4           ; Detection indicator bit (active low)
+EMTPORT         EQU     PORTA   ; Emitter drive port
+EMTBIT          EQU     2       ; Emmitter drive bit (active low)
+SNSPORT         EQU     PORTA   ; Sensor input port
+SNSBIT          EQU     3       ; Sensor input bit (active high)
+INDPORT         EQU     PORTA   ; Detection indicator port
+INDBIT          EQU     4       ; Detection indicator bit (active low)
 
 ; Detection input constants
-DETPORT         EQU     PORTB       ; Detection input port
-DETBIT          EQU     0           ; Detection input bit (active low)
+DETPORT         EQU     PORTB   ; Detection input port
+DETBIT          EQU     0       ; Detection input bit (active low)
 
 ; Inhibit (force display of red aspect) input constants
-INHPORT         EQU     PORTB       ; Inhibit input port
-INHBIT          EQU     1           ; Inhibit input bit (active low)
+INHPORT         EQU     PORTB   ; Inhibit input port
+INHBIT          EQU     1       ; Inhibit input bit (active low)
 
 ; Speed input constants
 SPDPORT         EQU     PORTB   ; Speed input port
 SPDBIT          EQU     3       ; Speed input bit
 
-INPHIGHWTR      EQU     200         ; Input debounce "On" threshold
-INPLOWWTR       EQU     55          ; Input debounce "Off" threshold
+INPHIGHWTR      EQU     200     ; Input debounce "On" threshold
+INPLOWWTR       EQU     55      ; Input debounce "Off" threshold
 
 ; Signalling status constants
 BLKSTATE        EQU     B'00000011' ; Mask to isolate signal block state bits
@@ -197,10 +194,9 @@ serPByt         ; Data byte buffer
 serPBitCnt      ; Bit down counter
 lnkPState       ; Link state register
 
-milliCount      ; Interrupt counter for millisecond timing
+centiCount      ; Interrupt counter for centisecond timing
 
-secCountLow     ; Millisecond counter (low byte) for second timing
-secCountHigh    ; Millisecond counter (high byte) for second timing
+secCount        ; Centisecond counter for second timing
 
 snsAcc          ; Detector sensor match (emitter state) accumulator
 
@@ -236,7 +232,7 @@ nxtState        ; Signalling status received from next signal
 
 aspectTime      ; Aspect interval for simulating next signal
 nxtTimer        ; Second counter for simulating next signal
-nxtLnkTmr       ; Millisecond counter for timing out next signal link
+nxtLnkTmr       ; Centisecond counter for timing out next signal link
 telemData       ; Data received from next or sent to previous signal
 
             ENDC
@@ -290,9 +286,9 @@ IntVector
 	call    SrvcLinkN       ; Service next signal link
 	call    SrvcLinkP       ; Service previous signal link
 
-    ; Run interrupt counter for millisecond timing
-    decfsz  milliCount,W    ; Decrement millisecond Interrupt counter into W
-    movwf   milliCount      ; If result is not zero update the counter
+    ; Run interrupt counter for centisecond timing
+    decfsz  centiCount,W    ; Decrement centisecond Interrupt counter into W
+    movwf   centiCount      ; If result is not zero update the counter
 
     ; Run detection logic
 
@@ -478,13 +474,11 @@ Boot
 
     ; Initialise timers
 
-    movlw   INTMILLI
-    movwf   milliCount      ; Initialise millisecond Interrupts counter
+    movlw   INTCENTI
+    movwf   centiCount      ; Initialise centisecond Interrupts counter
 
-    movlw   low SECMILLI
-    movwf   secCountLow     ; Initialise one second milliseconds counter low
-    movlw   high SECMILLI
-    movwf   secCountHigh    ; Initialise one second milliseconds counter high
+    movlw   SECCENTI
+    movwf   secCount        ; Initialise one second centiseconds counter
 
     movlw   low EEaspectTime
     call    GetEEPROM
@@ -510,29 +504,25 @@ Timing
 
     ; To keep the interrupt service routine as brief as possible timing is
     ; performed by the interrupt service routing decrementing a counter until
-    ; it reaches 1 indicating that a millisecond has passed.  Here in the main
+    ; it reaches 1 indicating that a centisecond has passed.  Here in the main
     ; program loop (i.e. outside the interrupt service routine) the count
     ; is tested and if found to be 1 it is reset and the various timing
     ; operations are performed.
 
-    decfsz  milliCount,W    ; Test millisecond Interrupts counter
-    goto    TimingEnd       ; Skip timing if a millisecond has not elapsed
+    decfsz  centiCount,W    ; Test centisecond Interrupts counter
+    goto    TimingEnd       ; Skip timing if a centisecond has not elapsed
 
-    movlw   INTMILLI        ; Reload millisecond Interrupts counter
-    movwf   milliCount
+    movlw   INTCENTI        ; Reload centisecond Interrupts counter
+    movwf   centiCount
 
     decfsz  nxtLnkTmr,W     ; Decrement next signal link timeout timer into W
     movwf   nxtLnkTmr       ; If result is not zero update the timer
 
-    decfsz  secCountLow,F   ; Decrement seconds counter low byte ...
-    goto    TimingEnd       ; ... skipping this jump if it has reached zero
-    decfsz  secCountHigh,F  ; Decrement second counter high byte ...
+    decfsz  secCount,F      ; Decrement second centiseconds counter byte ...
     goto    TimingEnd       ; ... skipping this jump if it has reached zero
 
-    movlw   low SECMILLI    ; Reload one second ...
-    movwf   secCountLow     ; ... milliseconds counter low byte
-    movlw   high SECMILLI   ; Reload one second ...
-    movwf   secCountHigh    ; ... milliseconds counter high byte
+    movlw   SECCENTI        ; Reload one second ...
+    movwf   secCount        ; ... centiseconds counter low byte
 
     decfsz  nxtTimer,W      ; Decrement next signal simulation timer into W
     movwf   nxtTimer        ; If result is not zero update the timer
@@ -563,6 +553,9 @@ IndicatorIsOff
 
     ; Detector correspondance has risen above threshold
     bcf     INDPORT,INDBIT  ; Turn detector indicator on
+
+    clrf    detAcc          ; Set detection input for train detected
+    incf    detAcc,F        ; Prevent rollover down through zero
 
 EndDetector
 
