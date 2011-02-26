@@ -207,12 +207,14 @@ lnkNState       ; Link state register (see 'link_hd.inc')
                 ;     4 - Switching to Tx
                 ;     5 - Waiting for far end to 'turn around'
                 ;     6 - Waiting for interface to 'settle'
-                ;     7 - Dummy state, go to Tx Idle
+                ;     7  - Transmiting break
+                ;          'Active' Tx states must be in the range 8 to 15
                 ;     8 - Tx idle
                 ;     9 - Transmiting data
-                ;   bit 4,5 - Unused
-                ;   bit 6   - Rx idle timedout without receiving any data
-                ;   bit 7   - Required direction, set = Tx, clear = Rx
+                ;   bit 4 - Unused
+                ;   bit 5 - Synchronise, Tx or Rx a break
+                ;   bit 6 - Rx idle timedout without receiving any data
+                ;   bit 7 - Required direction, set = Tx, clear = Rx
 
 ; Previous signal interface
 serPTmr         ; Interrupt counter for serial bit timing
@@ -228,12 +230,14 @@ lnkPState       ; Link state register (see 'link_hd.inc')
                 ;     4 - Switching to Tx
                 ;     5 - Waiting for far end to 'turn around'
                 ;     6 - Waiting for interface to 'settle'
-                ;     7 - Dummy state, go to Tx Idle
+                ;     7  - Transmiting break
+                ;          'Active' Tx states must be in the range 8 to 15
                 ;     8 - Tx idle
                 ;     9 - Transmiting data
-                ;   bit 4,5 - Unused
-                ;   bit 6   - Rx idle timedout without receiving any data
-                ;   bit 7   - Required direction, set = Tx, clear = Rx
+                ;   bit 4 - Unused
+                ;   bit 5 - Synchronise, Tx or Rx a break
+                ;   bit 6 - Rx idle timedout without receiving any data
+                ;   bit 7 - Required direction, set = Tx, clear = Rx
 
 intScCount       ; Interrupt scaling counter for second timing
 secCount        ; Scaled interrupts counter for second timing
@@ -414,13 +418,15 @@ InitTxN     InitTx  serNTmr, srlIfStat, TXNFLAG
 
 SrvcTxN     ServiceTx serNTmr, srlIfStat, serNByt, serNReg, TXNFLAG, serNBitCnt, INTSERBIT, TXPPORT, TXPBIT, RXNPORT, RXNBIT
 
+BrkTxN      BreakTx serNTmr, serNBitCnt, INTSERBIT, TXNPORT, TXNBIT
+
 SerTxN      SerialTx srlIfStat, TXNFLAG, serNByt
 
 LinkRxN		LinkRx lnkNState, SerRxN
 
 LinkTxN		LinkTx lnkNState, SerTxN
 
-SrvcLinkN	SrvcLink   SrvcRxN, SrvcTxN, lnkNState, INTLINKDEL, INTLINKTMO, serNTmr, EnableTxN, InitTxN, EnableRxN, InitRxN
+SrvcLinkN	SrvcLink   SrvcRxN, SrvcTxN, BrkTxN, lnkNState, INTLINKDEL, INTLINKTMO, serNTmr, EnableTxN, InitTxN, EnableRxN, InitRxN
 
 
 ;**********************************************************************
@@ -445,13 +451,15 @@ InitTxP     InitTx  serPTmr, srlIfStat, TXPFLAG
 
 SrvcTxP     ServiceTx serPTmr, srlIfStat, serPByt, serPReg, TXPFLAG, serPBitCnt, INTSERBIT, TXPPORT, TXPBIT, RXPPORT, RXPBIT
 
+BrkTxP      BreakTx serPTmr, serPBitCnt, INTSERBIT, TXPPORT, TXPBIT
+
 SerTxP      SerialTx srlIfStat, TXPFLAG, serPByt
 
 LinkRxP		LinkRx lnkPState, SerRxP
 
 LinkTxP		LinkTx lnkPState, SerTxP
 
-SrvcLinkP	SrvcLink   SrvcRxP, SrvcTxP, lnkPState, INTLINKDEL, INTLINKTMO, serPTmr, EnableTxP, InitTxP, EnableRxP, InitRxP
+SrvcLinkP	SrvcLink   SrvcRxP, SrvcTxP, BrkTxP, lnkPState, INTLINKDEL, INTLINKTMO, serPTmr, EnableTxP, InitTxP, EnableRxP, InitRxP
 
 
 ;**********************************************************************
