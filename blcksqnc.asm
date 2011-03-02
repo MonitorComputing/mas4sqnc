@@ -601,11 +601,10 @@ Boot
     clrf    spdAcc          ; Initialise special speed input for normal
     decf    spdAcc,F        ; Rollover through zero to 'full house'
 
-    movlw   ASPGREEN
-    movwf   lclState        ; Initialise this signal to green aspect
-
-    clrf    nxtState        ; Clear next signal state (cycle to green aspect)
-    clrf    prvState        ; Clear previous signal state
+    ; Clear all signal states (default to red)
+    clrf    nxtState
+    clrf    lclState
+    clrf    prvState
 
     ; Initialise timing
 
@@ -864,12 +863,6 @@ InhibitEnd
     decfsz  nxtTimer,W      ; Test if signalling timer elapsed ...
     goto    NxtBlkEnd       ; ... else skip next signal sequencing
 
-    btfss   nxtState,DETFLG ; Skip if next detection on ...
-    goto    SequenceNxtBlk  ; ... else sequence next signal aspect
-
-    bcf     nxtState,DETFLG ; Set simulated next signal train detection off
-    goto    DelayNxtBlk
-
 SequenceNxtBlk
     ; Time to simulate next signal changing aspect
     movlw   ASPINCR
@@ -933,7 +926,7 @@ BlockClear      ; State 0 - Block clear
 
 CheckNtrRev
     ; Check for train entering in reverse
-    btfss   nxtState,DETFLG ; Skip if exit detection on ...
+    btfss   lclState,DETFLG ; Skip if exit detection on ...
     goto    CheckNtrFwd     ; ... else check for train entering forwards
 
     ; Train at block exit,
@@ -946,7 +939,7 @@ CheckNtrRev
 
 CheckNtrFwd
     ; Check for train entering forwards
-    btfss   lclState,DETFLG ; Skip if entry detection on ...
+    btfss   prvState,DETFLG ; Skip if entry detection on ...
     goto    BlockEnd        ; ... else remain in current state
 
     ; Train at block entrance,
@@ -958,7 +951,7 @@ TrainEnteringF  ; State 1 - Train entering forward
 
 ChkSpnFwd
     ; Check for train spanning forward
-    btfss   nxtState,DETFLG ; Skip if exit detection on ...
+    btfss   lclState,DETFLG ; Skip if exit detection on ...
     goto    CheckOccFwd     ; ... else check for train occupying forwards
 
     ; Train at block exit,
@@ -970,7 +963,7 @@ ChkSpnFwd
     goto    BlockSpanned
 
 CheckOccFwd
-    btfsc   lclState,DETFLG ; Skip if entry detection off ...
+    btfsc   prvState,DETFLG ; Skip if entry detection off ...
     goto    TrainOnLine     ; ... else remain in current state
 
     ; Train no longer at block entrance,
@@ -982,7 +975,7 @@ BlockOccupied   ; State 2 - Block occupied
 
 CheckExtRev
     ; Check for train exiting in reverse
-    btfss   lclState,DETFLG ; Skip if entry detection on ...
+    btfss   prvState,DETFLG ; Skip if entry detection on ...
     goto    CheckExtFwd     ; ... else check for train exiting forwards
 
     ; Train at block entrance,
@@ -994,24 +987,7 @@ CheckExtRev
     goto    TrainLeavingR
 
 CheckExtFwd
-    call    LinkRxToN       ; Check link reception timeout
-    btfss   STATUS,Z        ; Skip if link timedout ...
-    goto    NextBlockLive   ; ... else skip simulation of next signal
-
-    ; Link to next signal timedout so simulate train passing next signal
-
-    movlw   ~ASPSTATE
-    andwf   nxtState,F      ; Clear next signal aspect value bits (= red)
-
-    bsf     nxtState,DETFLG ; Set simulated next signal train detection on
-
-    ; Load signalling timer to simulate time taken by train to traverse the
-    ; simulated next signal block
-    movf    aspectTime,W
-    movwf   nxtTimer
-
-NextBlockLive
-    btfss   nxtState,DETFLG ; Skip if exit detection on ...
+    btfss   lclState,DETFLG ; Skip if exit detection on ...
     goto    TrainOnLine     ; ... else remain in current state
 
     ; Train detected at block exit,
@@ -1021,7 +997,22 @@ NextBlockLive
 
 TrainLeavingF   ; State 3 - Train leaving forward
 
-    btfsc   nxtState,DETFLG ; Skip if exit detection off ...
+    call    LinkRxToN       ; Check link reception timeout
+    btfss   STATUS,Z        ; Skip if link timedout ...
+    goto    NextBlockLive   ; ... else skip simulation of next signal
+
+    ; Link to next signal timedout so simulate train passing next signal
+
+    movlw   ~ASPSTATE
+    andwf   nxtState,F      ; Clear next signal aspect value bits (= red)
+
+    ; Load signalling timer to simulate time taken by train to traverse the
+    ; simulated next signal block
+    movf    aspectTime,W
+    movwf   nxtTimer
+
+NextBlockLive
+    btfsc   lclState,DETFLG ; Skip if exit detection off ...
     goto    TrainOnLine     ; ... else remain in current state
 
     ; Train no longer at block exit,
@@ -1035,7 +1026,7 @@ BlockSpanned    ; State 4 - Block spanned
 
 CheckTrvRev
     ; Check for train traversal of block in reverse
-    btfsc   nxtState,DETFLG ; Skip if exit detection off ...
+    btfsc   lclState,DETFLG ; Skip if exit detection off ...
     goto    CheckTrvFwd     ; ... else check for train exiting forwards
 
     ; Train no longer at block exit,
@@ -1048,7 +1039,7 @@ CheckTrvRev
 
 CheckTrvFwd
     ; Check for train traversal of block forwards
-    btfsc   lclState,DETFLG ; Skip if entry detection off ...
+    btfsc   prvState,DETFLG ; Skip if entry detection off ...
     goto    TrainOnLine     ; ... else remain in current state
 
     ; Train no longer at block entrance,
@@ -1064,7 +1055,7 @@ TrainEnteringR  ; State 5 - Train entering reverse
 
 ChkSpnRev
     ; Check for train spanning in reverse
-    btfss   lclState,DETFLG ; Skip if entry detection on ...
+    btfss   prvState,DETFLG ; Skip if entry detection on ...
     goto    CheckOccRev     ; ... else check for train occupying in reverse
 
     ; Train at block entrance,
@@ -1076,7 +1067,7 @@ ChkSpnRev
     goto    BlockSpanned
 
 CheckOccRev
-    btfsc   nxtState,DETFLG ; Skip if exit detection off ...
+    btfsc   lclState,DETFLG ; Skip if exit detection off ...
     goto    TrainOnLine     ; ... else remain in current state
 
     ; Train no longer at block exit,
@@ -1090,7 +1081,7 @@ CheckOccRev
 
 TrainLeavingR   ; State 6 - Train leaving reverse
 
-    btfsc   lclState,DETFLG ; Skip if entry detection off ...
+    btfsc   prvState,DETFLG ; Skip if entry detection off ...
     goto    TrainOnLine     ; ... else remain in current state
 
     ; Train no longer at block entrance,
@@ -1112,7 +1103,7 @@ BlockEnd    ; End of signal block state machine
     goto    RedAspect       ; ... else display red aspect
 
     movlw   ASPSTATE        ; Test for red aspect required
-    andwf   lclState,W
+    andwf   nxtState,W      ; Aspect state is run by next controller
     btfsc   STATUS,Z        ; Skip if not zero (not red) ...
     goto    RedAspect       ; ... else display red aspect
 
