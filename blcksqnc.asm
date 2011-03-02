@@ -45,9 +45,9 @@
 ; Include and configuration directives                                *
 ;**********************************************************************
 
-    list      p=16F84
+    list      p=16C84
 
-#include <p16F84.inc>
+#include <p16C84.inc>
 
 ; Configuration word
 ;  - Code Protection Off
@@ -92,9 +92,14 @@ RTCCINT     EQU     160         ; 10KHz = (1MHz / 100)
 
 INTSERINI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
 INTSERBIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
-INTLNKDLYRX EQU     7           ; Interrupt cycles for link Rx turnaround delay
-INTLNKDLYTX EQU     5           ; Interrupt cycles for link Tx turnaround delay
-INTLINKTMO  EQU     100         ; Interrupt cycles for link Rx idle timeout
+INTLNKDLYRX EQU     0           ; Interrupt cycles for link Rx turnaround delay
+INTLNKDLYTX EQU     0           ; Interrupt cycles for link Tx turnaround delay
+INTLINKTMOP EQU     25          ; Interrupt cycles for previous link Rx timeout
+INTLINKTMON EQU     250         ; Interrupt cycles for next link Rx timeout
+
+#if (0 < high (INTSERINI | INTSERBIT | INTLNKDLYRX | INTLNKDLYTX | INTLINKTMOP | INTLINKTMON))
+    error "Timer values must be less than 0xFF to avoid overflow"
+#endif
 
 ; Next signal serial interface constants (see 'asyn_srl.inc')
 RXNFLG      EQU     0           ; Receive byte buffer 'loaded' status bit
@@ -149,9 +154,6 @@ SPDBIT      EQU     3           ; Special speed input bit (active low)
 
 INPHIGHWTR  EQU     B'11111000' ; Input debounce on threshold mask
 
-; Signalling status constants
-BLKSTATE    EQU     B'00000011' ; Mask to isolate signal block state bits
-
 ; Communications state values
 
 PRXFLG      EQU     0           ; Listen to previous signal
@@ -160,17 +162,23 @@ PRXSTATE    EQU     B'00000001' ; Inhibit state bit mask
 NTXFLG      EQU     1           ; Send to next signal
 NTXSTATE    EQU     B'00000001' ; Inhibit state bit mask
 
-; State values, 'this' block
-BLOCKCLEAR     EQU     0        ; Block clear state value
-TRAINENTERING  EQU     1        ; Train entering block state value
-BLOCKOCCUPIED  EQU     2        ; Block occupied state value
-TRAINLEAVING   EQU     3        ; Train leaving block state value
+; Signalling status constants
 
-ASPSTATE    EQU     B'11000000' ; Aspect value mask
-ASPSTSWP    EQU     B'00001100' ; Swapped nibbles aspect value mask
-ASPINCR     EQU     B'01000000' ; Aspect value increment
+; State values, 'this' block
+BLOCKCLEAR     EQU  0           ; Block clear state value
+TRAINENTERINGF EQU  1           ; Train entering forward state value
+BLOCKOCCUPIED  EQU  2           ; Block occupied state value
+TRAINLEAVINGF  EQU  3           ; Train leaving forward state value
+BLOCKSPANNED   EQU  4           ; Block spanned state value
+TRAINENTERINGR EQU  5           ; Train entering reverse state value
+TRAINLEAVINGR  EQU  6           ; Train leaving reverse state value
+BLKSTATE       EQU  B'00000111' ; Mask to isolate signal block state bits
+
 ASPGREEN    EQU     B'11000000' ; Green aspect value
 ASPDOUBLE   EQU     B'10000000' ; Double yellow aspect value mask
+ASPINCR     EQU     B'01000000' ; Aspect value increment
+ASPSTATE    EQU     B'11000000' ; Aspect value mask
+ASPSTSWP    EQU     B'00001100' ; Swapped nibbles aspect value mask
 
 INHFLG      EQU     3           ; Inhibit bit in status byte
 INHSTATE    EQU     B'00001000' ; Inhibit state bit mask
@@ -208,7 +216,7 @@ srlIfStat       ; Serial I/F status flags (see 'asyn_srl.inc')
                 ;
                 ;   bit 0 - Rx buffer full, Tx buffer clear
                 ;   bit 1 - Rx error
-                ;   bit 2 - Received break
+                ;   bit 2 - Received or sending break
                 ;   bit 3 - Seeking stop bit
                 ;
                 ;  Previous link (half duplex so Rx and Tx flags share bits)
@@ -216,7 +224,7 @@ srlIfStat       ; Serial I/F status flags (see 'asyn_srl.inc')
                 ;
                 ;   bit 4 - Rx buffer full, Tx buffer clear
                 ;   bit 5 - Rx error
-                ;   bit 6 - Received break
+                ;   bit 6 - Received or sending break
                 ;   bit 7 - Seeking stop bit
 
 ; Next signal interface
@@ -284,12 +292,14 @@ cmsState        ; Communications states register
                 ;   bit 2,7 - Unused
 
 lclState        ; Local signalling status
-                ;   bits 0,1 - Signal block state
-                ;     0 - Block Clear
-                ;     1 - Train entering Block
+                ;   bits 0,2 - Signal block state
+                ;     0 - Block clear
+                ;     1 - Train entering forward
                 ;     2 - Block occupied
-                ;     3 - Train leaving block
-                ;   bit 2 - Unused
+                ;     3 - Train leaving forward
+                ;     4 - Block spanned
+                ;     5 - Train entering reverse
+                ;     6 - Train leaving reverse
                 ;   bit 3 - Inhibit state
                 ;   bit 4 - Special speed
                 ;   bit 5 - Detection state
@@ -386,7 +396,7 @@ IntVector
 
     call    SrvcRxN         ; Service link serial reception
     xorlw   RX_BUSY         ; Test if receiving data
-    movlw   (INTLINKTMO + 1)
+    movlw   (INTLINKTMON + 1)
     btfsc   STATUS,Z        ; Skip if not receiving data ...
     movwf   lnkNTimer       ; ... else reload the Rx timeout counter
 
@@ -407,7 +417,7 @@ linkNNotRx
 
     call    SrvcRxP         ; Service link serial reception
     xorlw   RX_BUSY         ; Test if receiving data
-    movlw   (INTLINKTMO + 1)
+    movlw   (INTLINKTMOP + 1)
     btfsc   STATUS,Z        ; Skip if not receiving data ...
     movwf   lnkPTimer       ; ... else reload the Rx timeout counter
 
@@ -503,11 +513,14 @@ SerTxN      SerialTx srlIfStat, serNBffr, TXNFLG
 IsTxIdleN   IsTxIdle serNBitCnt
     return
 
-SrvcLinkN   SrvcLink   lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMO, EnableTxN, InitTxN, IsTxIdleN, EnableRxN, InitRxN
+SrvcLinkN   SrvcLink   lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, IsTxIdleN, EnableRxN, InitRxN
 
 LinkRxN     LinkRx lnkNState, SerRxN
 
 LinkTxN     LinkTx lnkNState, SerTxN
+
+LinkRxToN   IsLinkRxTo lnkNState, lnkNTimer
+    return
 
 
 ;**********************************************************************
@@ -537,12 +550,14 @@ SerTxP      SerialTx srlIfStat, serPBffr, TXPFLG
 IsTxIdleP   IsTxIdle serPBitCnt
     return
 
-SrvcLinkP   SrvcLink   lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMO, EnableTxP, InitTxP, IsTxIdleP, EnableRxP, InitRxP
+SrvcLinkP   SrvcLink   lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, IsTxIdleP, EnableRxP, InitRxP
 
 LinkRxP     LinkRx lnkPState, SerRxP
 
 LinkTxP     LinkTx lnkPState, SerTxP
 
+LinkRxToP   IsLinkRxTo lnkPState, lnkPTimer
+    return
 
 ;**********************************************************************
 ; Main program initialisation code                                    *
@@ -739,9 +754,6 @@ DecSpdAcc
 
 SpeedEnd
 
-    call    SrvcLinkN       ; Service next signal link
-    call    SrvcLinkP       ; Service previous signal link
-
     ; Look for status reply from previous signal
 
     btfss   cmsState,PRXFLG ; Skip if waiting for reply from previous ...
@@ -751,8 +763,8 @@ SpeedEnd
     btfsc   STATUS,Z        ; Skip if no data received ...
     goto    DecodePrev      ; ... else decode received data
 
-    decfsz  lnkPTimer,W     ; Test if link timedout ...
-    goto    PrevRxEnd       ; ... skip if not timed out ...
+    call    LinkRxToP       ; Check link reception timeout
+    btfsc   STATUS,Z        ; Skip if link not timedout ...
     bcf     cmsState,PRXFLG ; ... else resume sending to previous signal
     goto    PrevRxEnd
 
@@ -777,8 +789,6 @@ DecodePrev
     movwf   prvState        ; Save received data as previous signal status
 
 PrevRxEnd
-
-;    goto    NextTimedOut
 
     ; Look for status received from next signal
 
@@ -817,7 +827,8 @@ PrevRxEnd
     ; Test if next signal link has timedout, i.e. there is no next signal
 
 TimeoutNext
-    decfsz  lnkNTimer,W     ; Skip if link timedout ...
+    call    LinkRxToN       ; Check link reception timeout
+    btfss   STATUS,Z        ; Skip if link timedout ...
     goto    NxtBlkEnd       ; ... else keep waiting for data
 
 NextTimedOut
@@ -886,18 +897,20 @@ NxtBlkEnd   ; End of simulation of next signal.
     addwf   PCL,F           ; ... as offset into state jump table
 
 BlockTable
-    goto    BlockClear      ; State  0 - Block clear
-    goto    TrainEntering   ; State  1 - Train entering Block
-    goto    BlockOccupied   ; State  2 - Block occupied
-    goto    TrainLeaving    ; State  3 - Train leaving block
+    goto    BlockClear      ; State 0 - Block clear
+    goto    TrainEnteringF  ; State 1 - Train entering forward
+    goto    BlockOccupied   ; State 2 - Block occupied
+    goto    TrainLeavingF   ; State 3 - Train leaving forward
+    goto    BlockSpanned    ; State 4 - Block spanned
+    goto    TrainEnteringR  ; State 5 - Train entering reverse
+    goto    TrainLeavingR   ; State 6 - Train leaving reverse
 
 #if (high BlockTable) != (high $)
     error "Signal block state jump table split across page boundary"
 #endif
 
 
-BlockClear
-    ; State = "Block clear".
+BlockClear      ; State 0 - Block clear
 
     ; Set signal aspect, this signals aspect value (if not Red) depends on the
     ; aspect value of the next signal such that:
@@ -918,39 +931,71 @@ BlockClear
 
     iorwf   lclState,F      ; Set new aspect value
 
-BlockDetect
-    ; Test the state of the train detection for this signal.  If on set the
-    ; state of this signal to "Train entering block" and the displayed signal
-    ; aspect to "Red".
+CheckNtrRev
+    ; Check for train entering in reverse
+    btfss   nxtState,DETFLG ; Skip if exit detection on ...
+    goto    CheckNtrFwd     ; ... else check for train entering forwards
 
-    btfss   lclState,DETFLG ; Skip if detection on ...
-    goto    BlockEnd        ; ... else remain in current state
-
-    ; Train detected at block entrance, set signal state to "Train entering
-    ; block" and set signal aspect value to 'red'.
-    movlw   ~(BLKSTATE | ASPSTATE)
-    andwf   lclState,W
-    iorlw   TRAINENTERING
-    movwf   lclState
-
-
-TrainEntering
-    ; State = "Train entering block"
-
-    btfsc   lclState,DETFLG ; Skip if detection off ...
-    goto    BlockEnd        ; ... else remain in current state
-
-    ; Train no longer at block entrance, set state to "Block Occupied".
+    ; Train at block exit,
+    ; next state = 5 - Train entering reverse
     movlw   ~BLKSTATE
     andwf   lclState,W
-    iorlw   BLOCKOCCUPIED
+    iorlw   TRAINENTERINGR
     movwf   lclState
+    goto    TrainEnteringR
+
+CheckNtrFwd
+    ; Check for train entering forwards
+    btfss   lclState,DETFLG ; Skip if entry detection on ...
+    goto    BlockEnd        ; ... else remain in current state
+
+    ; Train at block entrance,
+    ; next state = 1 - Train entering forward,
+    incf    lclState,F
 
 
-BlockOccupied
-    ; State = "Block occupied".
+TrainEnteringF  ; State 1 - Train entering forward
 
-    decfsz  lnkNTimer,W     ; Skip if link timedout ...
+ChkSpnFwd
+    ; Check for train spanning forward
+    btfss   nxtState,DETFLG ; Skip if exit detection on ...
+    goto    CheckOccFwd     ; ... else check for train occupying forwards
+
+    ; Train at block exit,
+    ; next state = 4 - Block spanned
+    movlw   ~BLKSTATE
+    andwf   lclState,W
+    iorlw   BLOCKSPANNED
+    movwf   lclState
+    goto    BlockSpanned
+
+CheckOccFwd
+    btfsc   lclState,DETFLG ; Skip if entry detection off ...
+    goto    TrainOnLine     ; ... else remain in current state
+
+    ; Train no longer at block entrance,
+    ; next state = 2 - Block occupied
+    incf    lclState,F
+
+
+BlockOccupied   ; State 2 - Block occupied
+
+CheckExtRev
+    ; Check for train exiting in reverse
+    btfss   lclState,DETFLG ; Skip if entry detection on ...
+    goto    CheckExtFwd     ; ... else check for train exiting forwards
+
+    ; Train at block entrance,
+    ; next state = 6 - Train leaving reverse
+    movlw   ~BLKSTATE
+    andwf   lclState,W
+    iorlw   TRAINLEAVINGR
+    movwf   lclState
+    goto    TrainLeavingR
+
+CheckExtFwd
+    call    LinkRxToN       ; Check link reception timeout
+    btfss   STATUS,Z        ; Skip if link timedout ...
     goto    NextBlockLive   ; ... else skip simulation of next signal
 
     ; Link to next signal timedout so simulate train passing next signal
@@ -966,29 +1011,100 @@ BlockOccupied
     movwf   nxtTimer
 
 NextBlockLive
-    btfss   nxtState,DETFLG ; Skip if next detection on ...
-    goto    BlockEnd        ; ... else remain in current state
+    btfss   nxtState,DETFLG ; Skip if exit detection on ...
+    goto    TrainOnLine     ; ... else remain in current state
 
-    ; Train detected at block exit, set state to "Train leaving block".
+    ; Train detected at block exit,
+    ; next state = 3 - Train leaving forward
+    incf    lclState,F
+
+
+TrainLeavingF   ; State 3 - Train leaving forward
+
+    btfsc   nxtState,DETFLG ; Skip if exit detection off ...
+    goto    TrainOnLine     ; ... else remain in current state
+
+    ; Train no longer at block exit,
+    ; next state = 0 - Block clear
+    movlw   ~BLKSTATE
+    andwf   lclState,F
+    goto    BlockEnd
+
+
+BlockSpanned    ; State 4 - Block spanned
+
+CheckTrvRev
+    ; Check for train traversal of block in reverse
+    btfsc   nxtState,DETFLG ; Skip if exit detection off ...
+    goto    CheckTrvFwd     ; ... else check for train exiting forwards
+
+    ; Train no longer at block exit,
+    ; next state = 6 - Train leaving reverse
     movlw   ~BLKSTATE
     andwf   lclState,W
-    iorlw   TRAINLEAVING
+    iorlw   TRAINLEAVINGR
     movwf   lclState
+    goto    TrainLeavingR
 
+CheckTrvFwd
+    ; Check for train traversal of block forwards
+    btfsc   lclState,DETFLG ; Skip if entry detection off ...
+    goto    TrainOnLine     ; ... else remain in current state
 
-TrainLeaving
-    ; State ="Train leaving block".
-
-    btfsc   nxtState,DETFLG ; Skip if next detection off ...
-    goto    BlockEnd        ; ... else remain in current state
-
-    ; Train no longer detected at block exit, set state to "Block Clear".
+    ; Train no longer at block entrance,
+    ; next state = 3 - Train leaving forward
     movlw   ~BLKSTATE
     andwf   lclState,W
-    iorlw   BLOCKCLEAR
+    iorlw   TRAINLEAVINGF
     movwf   lclState
+    goto    TrainLeavingF
 
-BlockEnd    ; End of signal block state machine.
+
+TrainEnteringR  ; State 5 - Train entering reverse
+
+ChkSpnRev
+    ; Check for train spanning in reverse
+    btfss   lclState,DETFLG ; Skip if entry detection on ...
+    goto    CheckOccRev     ; ... else check for train occupying in reverse
+
+    ; Train at block entrance,
+    ; next state = 4 - Block spanned
+    movlw   ~BLKSTATE
+    andwf   lclState,W
+    iorlw   BLOCKSPANNED
+    movwf   lclState
+    goto    BlockSpanned
+
+CheckOccRev
+    btfsc   nxtState,DETFLG ; Skip if exit detection off ...
+    goto    TrainOnLine     ; ... else remain in current state
+
+    ; Train no longer at block exit,
+    ; next state = 2 - Block occupied
+    movlw   ~BLKSTATE
+    andwf   lclState,W
+    iorlw   BLOCKOCCUPIED
+    movwf   lclState
+    goto    BlockOccupied
+
+
+TrainLeavingR   ; State 6 - Train leaving reverse
+
+    btfsc   lclState,DETFLG ; Skip if entry detection off ...
+    goto    TrainOnLine     ; ... else remain in current state
+
+    ; Train no longer at block entrance,
+    ; next state = 0 - Block clear
+    movlw   ~BLKSTATE
+    andwf   lclState,F
+    goto    BlockEnd
+
+
+TrainOnLine ; End of signal block state machine with line occupied
+    movlw   ~ASPSTATE
+    andwf   lclState,F      ; Clear signal aspect value bits (= red)
+
+BlockEnd    ; End of signal block state machine
 
     ; Set aspect display output
 
@@ -1039,6 +1155,9 @@ RedAspect
     bsf     ASPPORT,REDOUT
 
 AspectEnd   ; End of aspect display output
+
+    call    SrvcLinkN       ; Service next signal link
+    call    SrvcLinkP       ; Service previous signal link
 
     ; Encode status for transmission
 
