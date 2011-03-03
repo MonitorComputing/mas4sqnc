@@ -3,14 +3,18 @@
 ;**********************************************************************
 ;                                                                     *
 ;    Description:   Controller for four aspect colour light signal    *
-;                   with associated positional train detector after   *
-;                   signal. Continuosly transmits displayed aspect    *
-;                   and detector state to 'previous' signal whilst    *
-;                   listening for same from 'next' signal.            *
+;                   with associated positional train detector (placed *
+;                   after signal in normal running direction.         *
+;                   Continuosly transmits displayed aspect            *
+;                   and detector state to 'previous' signal (in rear) *
+;                   whilst listening for same from 'next' signal (in  *
+;                   advance).                                         *
+;                   If data received from 'previous' signal this is   *
+;                   used to determine section occupation.             *
 ;                   If data received from 'next' signal this is used  *
-;                   to determine section occupation and aspect to     *
-;                   display.  Otherwise aspect to display is set by   *
-;                   a fixed period timer once train has passed.       *
+;                   to determine aspect to display.  Otherwise aspect *
+;                   to display is cycled from red to green at fixed   *
+;                   intervals once the train has passed.              *
 ;                                                                     *
 ;    Author:        Chris White                                       *
 ;    Company:       Monitor Computing Services Ltd.                   *
@@ -154,14 +158,6 @@ SPDBIT      EQU     3           ; Special speed input bit (active low)
 
 INPHIGHWTR  EQU     B'11111000' ; Input debounce on threshold mask
 
-; Communications state values
-
-PRXFLG      EQU     0           ; Listen to previous signal
-PRXSTATE    EQU     B'00000001' ; Inhibit state bit mask
-
-NTXFLG      EQU     1           ; Send to next signal
-NTXSTATE    EQU     B'00000001' ; Inhibit state bit mask
-
 ; Signalling status constants
 
 ; State values, 'this' block
@@ -178,10 +174,9 @@ ASPGREEN    EQU     B'11000000' ; Green aspect value
 ASPDOUBLE   EQU     B'10000000' ; Double yellow aspect value mask
 ASPINCR     EQU     B'01000000' ; Aspect value increment
 ASPSTATE    EQU     B'11000000' ; Aspect value mask
-ASPSTSWP    EQU     B'00001100' ; Swapped nibbles aspect value mask
 
-INHFLG      EQU     3           ; Inhibit bit in status byte
-INHSTATE    EQU     B'00001000' ; Inhibit state bit mask
+REVFLG      EQU     3           ; Line reversed bit in status byte
+REVSTATE    EQU     B'00001000' ; Line reversed state bit mask
 
 SPDFLG      EQU     4           ; Special speed bit in status byte
 SPDSTATE    EQU     B'00010000' ; Special speed state bit mask
@@ -189,12 +184,20 @@ SPDSTATE    EQU     B'00010000' ; Special speed state bit mask
 DETFLG      EQU     5           ; Train detection bit in status byte
 DETSTATE    EQU     B'00100000' ; Train detection state bit mask
 
+NRVFLG      EQU     DETFLG      ; Line reversed bit in status from next signal
+NRVSTATE    EQU     DETSTATE    ; Line reversed state from next bit mask
+
 ; Aspect output constants
 ASPPORT     EQU     PORTB       ; Aspect output port
 REDOUT      EQU     7           ; Red aspect output bit
+REDMSK      EQU     B'10000000' ; Mask for red aspect output bit
 YELLOWOUT   EQU     6           ; Yellow aspect output bit
+YELLOWMSK   EQU     B'01000000' ; Mask for yellow aspect output bit
 GREENOUT    EQU     5           ; Green aspect output bit
-DOUBLEOUT   EQU     4           ; Second yellow aspect output bit
+GREENMSK    EQU     B'00100000' ; Mask for green aspect output bit
+DOUBLEOUT   EQU     4           ; Double yellow aspect output bit
+DBLYLWMSK   EQU     B'00010000' ; Mask for double yellow aspect output bit
+ASPOUTMSK   EQU     B'11110000' ; Mask for aspect output bits
 
 
 ;**********************************************************************
@@ -236,17 +239,20 @@ serNBffr        ; Data byte buffer
 lnkNTimer       ; Rx timeout timer
 lnkNState       ; Link state register (see 'link_hd.inc')
                 ;   bit 0,3 - Current state
-                ;     0 - Switching to Rx
-                ;     1 - Waiting for interface lines to settle
-                ;     2 - Receiving data
-                ;     3 - Unused
-                ;     4 - Switching to Tx
-                ;     5 - Waiting for far end to turn around
-                ;     6 - Waiting for interface lines to settle
-                ;     7 - Unused
+                ;          Rx states must be in the range 0 to 3
+                ;     0  - Switching to Rx
+                ;     1  - Waiting for interface lines to settle
+                ;     2  - Receiving data
+                ;     3  - Unused
+                ;          Tx states must be in the range 4 to 15
+                ;     4  - Unused
+                ;     5  - Unused
+                ;     6  - Switching to Tx
+                ;     7  - Waiting for far end to turn around
                 ;          'Active' Tx states must be in the range 8 to 15
-                ;     8 - Transmiting break
-                ;     9 - Transmiting data
+                ;     8  - Waiting for interface lines to settle
+                ;     9  - Transmiting break
+                ;     10 - Transmiting data
                 ;   bit 4 - Tx enabled
                 ;   bit 5 - Rx enabled
                 ;   bit 6 - Synchronise, Tx or Rx a break
@@ -261,17 +267,20 @@ serPBffr        ; Data byte buffer
 lnkPTimer       ; Rx timeout timer
 lnkPState       ; Link state register (see 'link_hd.inc')
                 ;   bit 0,3 - Current state
-                ;     0 - Switching to Rx
-                ;     1 - Waiting for interface lines to settle
-                ;     2 - Receiving data
-                ;     3 - Unused
-                ;     4 - Switching to Tx
-                ;     5 - Waiting for far end to turn around
-                ;     6 - Waiting for interface lines to settle
-                ;     7 - Unused
+                ;          Rx states must be in the range 0 to 3
+                ;     0  - Switching to Rx
+                ;     1  - Waiting for interface lines to settle
+                ;     2  - Receiving data
+                ;     3  - Unused
+                ;          Tx states must be in the range 4 to 15
+                ;     4  - Unused
+                ;     5  - Unused
+                ;     6  - Switching to Tx
+                ;     7  - Waiting for far end to turn around
                 ;          'Active' Tx states must be in the range 8 to 15
-                ;     8 - Transmiting break
-                ;     9 - Transmiting data
+                ;     8  - Waiting for interface lines to settle
+                ;     9  - Transmiting break
+                ;     10 - Transmiting data
                 ;   bit 4 - Tx enabled
                 ;   bit 5 - Rx enabled
                 ;   bit 6 - Synchronise, Tx or Rx a break
@@ -286,11 +295,6 @@ detAcc          ; Detection input debounce accumulator
 inhAcc          ; Inhibit input debounce accumulator
 spdAcc          ; Speed input debounce accumulator
 
-cmsState        ; Communications states register
-                ;   bit 0 - Listen to previous signal (default is to send)
-                ;   bit 1 - Send to next signal (default is to listen)
-                ;   bit 2,7 - Unused
-
 lclState        ; Local signalling status
                 ;   bits 0,2 - Signal block state
                 ;     0 - Block clear
@@ -300,7 +304,7 @@ lclState        ; Local signalling status
                 ;     4 - Block spanned
                 ;     5 - Train entering reverse
                 ;     6 - Train leaving reverse
-                ;   bit 3 - Inhibit state
+                ;   bit 3 - Block reversed
                 ;   bit 4 - Special speed
                 ;   bit 5 - Detection state
                 ;   bits 6,7 - Aspect value
@@ -312,7 +316,7 @@ lclState        ; Local signalling status
 nxtState        ; Remote signalling status from next signal
                 ;   bits 0,3 - Unused
                 ;   bit 4 - Special speed
-                ;   bit 5 - Detection state
+                ;   bit 5 - Line reversed
                 ;   bits 6,7 - Aspect value
                 ;     0 - Red
                 ;     1 - Yellow
@@ -331,7 +335,6 @@ prvState        ; Remote signalling status from previous signal
 
 aspectTime      ; Aspect interval for simulating next signal
 nxtTimer        ; Second counter for simulating next signal
-telemData       ; Data exchanged with next and previous signals
 telemPrv        ; Data last received from previous signal
 telemNxt        ; Data last received from next signal
 
@@ -487,79 +490,6 @@ EndISR
 
 
 ;**********************************************************************
-; Instance next signal interface routine macros                       *
-;**********************************************************************
-
-EnableRxN   EnableRx  RXNTRIS, RXNPORT, RXNBIT
-    return
-
-InitRxN     InitRx  srlIfStat, serNTimer, serNBitCnt, serNReg, RXNFLG, RXNERR, RXNBREAK, RXNSTOP
-    return
-
-SrvcRxN     ServiceRx srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, RXNPORT, RXNBIT, INTSERINI, INTSERBIT, RXNERR, RXNBREAK, RXNSTOP, RXNFLG
-
-SerRxN      SerialRx srlIfStat, serNBffr, RXNFLG
-
-EnableTxN   EnableTx  TXNTRIS, TXNPORT, TXNBIT
-    return
-
-InitTxN     InitTx  srlIfStat, serNTimer, serNBitCnt, serNReg, TXNFLG, TXNBREAK
-    return
-
-SrvcTxN     ServiceTx srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, TXNPORT, TXNBIT, RXNPORT, RXNBIT, INTSERBIT, TXNFLG, TXNBREAK
-
-SerTxN      SerialTx srlIfStat, serNBffr, TXNFLG
-
-IsTxIdleN   IsTxIdle serNBitCnt
-    return
-
-SrvcLinkN   SrvcLink   lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, IsTxIdleN, EnableRxN, InitRxN
-
-LinkRxN     LinkRx lnkNState, SerRxN
-
-LinkTxN     LinkTx lnkNState, SerTxN
-
-LinkRxToN   IsLinkRxTo lnkNState, lnkNTimer
-    return
-
-
-;**********************************************************************
-; Instance previous signal interface routine macros                   *
-;**********************************************************************
-
-EnableRxP   EnableRx  RXPTRIS, RXPPORT, RXPBIT
-    return
-
-InitRxP     InitRx  srlIfStat, serPTimer, serPBitCnt, serPReg, RXPFLG, RXPERR, RXPBREAK, RXPSTOP
-    return
-
-SrvcRxP     ServiceRx srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, RXPPORT, RXPBIT, INTSERINI, INTSERBIT, RXPERR, RXPBREAK, RXPSTOP, RXPFLG
-
-SerRxP      SerialRx srlIfStat, serPBffr, RXPFLG
-
-EnableTxP   EnableTx  TXPTRIS, TXPPORT, TXPBIT
-    return
-
-InitTxP     InitTx  srlIfStat, serPTimer, serPBitCnt, serPReg, TXPFLG, TXPBREAK
-    return
-
-SrvcTxP     ServiceTx srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, TXPPORT, TXPBIT, RXPPORT, RXPBIT, INTSERBIT, TXPFLG, TXPBREAK
-
-SerTxP      SerialTx srlIfStat, serPBffr, TXPFLG
-
-IsTxIdleP   IsTxIdle serPBitCnt
-    return
-
-SrvcLinkP   SrvcLink   lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, IsTxIdleP, EnableRxP, InitRxP
-
-LinkRxP     LinkRx lnkPState, SerRxP
-
-LinkTxP     LinkTx lnkPState, SerTxP
-
-LinkRxToP   IsLinkRxTo lnkPState, lnkPTimer
-    return
-
-;**********************************************************************
 ; Main program initialisation code                                    *
 ;**********************************************************************
 
@@ -619,22 +549,11 @@ Boot
     movwf   aspectTime      ; Initialise aspect interval for next signal
     movwf   nxtTimer        ; Initialise timer used to simulate next signal
 
-    clrf    telemData       ; Clear serial link data store
-    clrf    cmsState        ; Clear communications states register
-
     ; Initialise next signal link to receive
     call    InitRxN
-    movlw   SWITCH2RXSTATE
-    movwf   lnkNState
-    bcf     lnkNState,LNKDIRFLG
-    call    SrvcLinkN
 
     ; Initialise previous signal link to transmit
     call    InitTxP
-    movlw   SWITCH2TXSTATE
-    movwf   lnkPState
-    bsf     lnkPState,LNKDIRFLG
-    call    SrvcLinkP
 
     ; Initialise interrupts
     movlw   RTCCINT
@@ -755,34 +674,38 @@ SpeedEnd
 
     ; Look for status reply from previous signal
 
-    btfss   cmsState,PRXFLG ; Skip if waiting for reply from previous ...
-    goto    PrevRxEnd       ; ... else skip over previous signal receive
+    btfsc   lnkPState,LNKDIRFLG ; Skip if waiting for reply from previous ...
+    goto    PrevRxEnd           ; ... else skip over previous signal receive
+
+    call    LinkRxToP           ; Check link reception timeout
+    btfsc   STATUS,Z            ; Skip if link not timedout ...
+    bsf     lnkPState,LNKDIRFLG ; ... else resume sending to previous signal
 
     call    LinkRxP         ; Check for data from previous signal
-    btfsc   STATUS,Z        ; Skip if no data received ...
-    goto    DecodePrev      ; ... else decode received data
-
-    call    LinkRxToP       ; Check link reception timeout
-    btfsc   STATUS,Z        ; Skip if link not timedout ...
-    bcf     cmsState,PRXFLG ; ... else resume sending to previous signal
-    goto    PrevRxEnd
+    btfss   STATUS,Z        ; Skip if data received ...
+    goto    PrevRxEnd       ; ... else skip over received data decoding
 
 DecodePrev
 
-    bcf     cmsState,PRXFLG ; Resume sending to previous signal
+    bsf     lnkPState,LNKDIRFLG ; Resume sending to previous signal
 
-    ; New data received, decode it
-    movwf   telemData       ; Store the received data
-    swapf   telemData,W     ; Copy received data but with nibbles swapped
-    comf    telemData,F     ; One's complement the received data
-    xorwf   telemData,W     ; Exclusive or complemented and swapped data
-    btfss   STATUS,Z        ; Skip if result is zero, i.e. data is ok ...
-    goto    PrevRxEnd       ; ... else ignore received data
+    movwf   FSR             ; Store the received data
 
-    comf    telemData,W     ; Recover the as received data
+    ; As a simple error check received data is ignored unless same value
+    ; received twice in succession
+
     xorwf   telemPrv,F      ; Test against last data received
     movwf   telemPrv        ; Replace last data received
     btfss   STATUS,Z        ; Skip if last and just received data match ...
+    goto    PrevRxEnd       ; ... else ignore received data
+
+    ; Only four bits of signalling status need to be sent so as a simple error
+    ; check these are in low nibble with their ones complement in high nibble
+
+    swapf   FSR,W           ; Get received data but with nibbles swapped
+    comf    FSR,F           ; Ones complement the received data
+    xorwf   FSR,F           ; Exclusive or complemented and swapped data
+    btfss   STATUS,Z        ; Skip if result is zero, i.e. data is ok ...
     goto    PrevRxEnd       ; ... else ignore received data
 
     movwf   prvState        ; Save received data as previous signal status
@@ -791,74 +714,49 @@ PrevRxEnd
 
     ; Look for status received from next signal
 
-    btfsc   cmsState,NTXFLG ; Skip if not replying to next signal ...
-    goto    NxtBlkEnd       ; ... else skip over next signal receive
+    btfsc   lnkNState,LNKDIRFLG ; Skip if not replying to next ...
+    goto    NextRxEnd           ; ... else skip over next signal receive
 
     call    LinkRxN         ; Check for data from next signal
     btfss   STATUS,Z        ; Skip if data received ...
-    goto    TimeoutNext     ; ... else check for link timedout
+    goto    NextRxEnd       ; ... else skip over next signal receive
 
-    ; New data received, decode it
-    movwf   telemData       ; Store the received data
-    swapf   telemData,W     ; Copy received data but with nibbles swapped
-    comf    telemData,F     ; One's complement the received data
-    xorwf   telemData,W     ; Exclusive or complemented and swapped data
-    btfss   STATUS,Z        ; Skip if result is zero, i.e. data is ok ...
-    goto    NxtBlkEnd       ; ... else ignore received data
+    movwf   FSR             ; Store the received data
 
-    comf    telemData,W     ; Recover the as received data
+    ; As a simple error check received data is ignored unless same value
+    ; received twice in succession
+
     xorwf   telemNxt,F      ; Test against last data received
     movwf   telemNxt        ; Replace last data received
     btfss   STATUS,Z        ; Skip if last and just received data match ...
-    goto    NxtBlkEnd       ; ... else ignore received data
+    goto    NextRxEnd       ; ... else ignore received data
+
+    ; Only four bits of signalling status need to be sent so as a simple error
+    ; check these are in low nibble with their ones complement in high nibble
+
+    swapf   FSR,W           ; Get received data but with nibbles swapped
+    comf    FSR,F           ; Ones complement the received data
+    xorwf   FSR,F           ; Exclusive or complemented and swapped data
+    btfss   STATUS,Z        ; Skip if result is zero, i.e. data is ok ...
+    goto    NextRxEnd       ; ... else ignore received data
 
     movwf   nxtState        ; Save received data as next signal status
 
-    bsf     cmsState,NTXFLG ; Start replying to next signal
+    bsf     lnkNState,LNKDIRFLG ; Reply to next signal
 
     ; If next signal link is not timed out then ignore inhibit input
-    bcf     lclState,INHFLG ; Set inhibit state to off
     clrf    inhAcc          ; Reset inhibit input for automatic free run
     decf    inhAcc,F        ; Rollover through zero to 'full house'
 
-    goto    NxtBlkEnd
+NextRxEnd
 
     ; Test if next signal link has timedout, i.e. there is no next signal
 
-TimeoutNext
     call    LinkRxToN       ; Check link reception timeout
     btfss   STATUS,Z        ; Skip if link timedout ...
-    goto    NxtBlkEnd       ; ... else keep waiting for data
+    goto    NextNotTimedOut ; ... else keep waiting for data
 
-NextTimedOut
-    ; Next signal link timed out, check status of inhibit input (active low)
-
-    btfss   INHPORT,INHBIT  ; Skip if inhibit input is set ...
-    goto    DecInhAcc       ; ... else jump if not set
-
-    incf    inhAcc,W        ; Increment inhibit input accumulator
-    btfsc   STATUS,Z        ; Skip if not rolled over to zero ...
-    goto    InhibitEnd      ; ... else do nothing
-    
-    movwf   inhAcc          ; Update inhibit input accumulator
-
-    andlw   INPHIGHWTR      ; Test if above off threshold
-    btfss   STATUS,Z        ; Skip if not above off threshold ...
-    bcf     lclState,INHFLG ; ... else set inhibit state to off
-    goto    InhibitEnd   
-
-DecInhAcc
-    decf    inhAcc,W        ; Decrement inhibit input accumulator
-
-    btfss   STATUS,Z        ; Skip if reached zero ...
-    movwf   inhAcc          ; ... else  update the accumulator
-
-    btfsc   STATUS,Z        ; Skip if above on threshold (not reached zero) ...
-    bsf     lclState,INHFLG ; ... else set inhibit state to on
-
-InhibitEnd
-
-    ; Link to next signal timedout, simulate next signal
+    ; Next signal link timed out, simulate next signal
 
     decfsz  nxtTimer,W      ; Test if signalling timer elapsed ...
     goto    NxtBlkEnd       ; ... else skip next signal sequencing
@@ -876,6 +774,36 @@ DelayNxtBlk
     movwf   nxtTimer
 
 NxtBlkEnd   ; End of simulation of next signal.
+
+    ; Next signal link timed out, check status of inhibit input (active low)
+
+    btfss   INHPORT,INHBIT  ; Skip if inhibit input is set ...
+    goto    DecInhAcc       ; ... else jump if not set
+
+    decfsz  inhAcc,W        ; Skip if inhibit accumulator reached zero ...
+    movwf   inhAcc          ; ... else update inhibit input accumulator
+    goto    InhibitEnd   
+
+DecInhAcc
+    decf    inhAcc,W        ; Decrement inhibit input accumulator
+
+    btfss   STATUS,Z        ; Skip if reached zero ...
+    movwf   inhAcc          ; ... else  update the accumulator
+
+    btfss   STATUS,Z        ; Skip if not above on threshold (reached zero) ...
+    goto    InhibitEnd      ; ... else leave inhibit state to on
+
+    movlw   ~ASPSTATE
+    andwf   nxtState,F      ; Clear next signal aspect value bits (= red)
+
+    ; Load signalling timer to simulate time taken by train to traverse the
+    ; simulated next signal block
+    movf    aspectTime,W
+    movwf   nxtTimer
+
+InhibitEnd
+
+NextNotTimedOut
 
     ; Run this signal block state machine
     ; The signal aspect to display and exit of a train from the signal block
@@ -914,7 +842,10 @@ BlockClear      ; State 0 - Block clear
     ; Green            Green
 
     movlw   ~ASPSTATE
-    andwf   lclState,F      ; Clear current aspect value bits
+    andwf   lclState,F      ; Clear signal aspect value bits (= red)
+
+    btfsc   nxtState,NRVFLG ; Skip if next block is not line reversed ...
+    goto    CheckNtrRev     ; ... else leave signal aspect as red
 
     movlw   ASPINCR
     addwf   nxtState,W      ; Increment next signal aspect value into W
@@ -949,6 +880,8 @@ CheckNtrFwd
 
 TrainEnteringF  ; State 1 - Train entering forward
 
+    bcf     lclState,REVFLG ; Clear line reversed flag for local block
+
 ChkSpnFwd
     ; Check for train spanning forward
     btfss   lclState,DETFLG ; Skip if exit detection on ...
@@ -964,7 +897,7 @@ ChkSpnFwd
 
 CheckOccFwd
     btfsc   prvState,DETFLG ; Skip if entry detection off ...
-    goto    TrainOnLine     ; ... else remain in current state
+    goto    TrainInBlock    ; ... else remain in current state
 
     ; Train no longer at block entrance,
     ; next state = 2 - Block occupied
@@ -988,7 +921,7 @@ CheckExtRev
 
 CheckExtFwd
     btfss   lclState,DETFLG ; Skip if exit detection on ...
-    goto    TrainOnLine     ; ... else remain in current state
+    goto    TrainInBlock    ; ... else remain in current state
 
     ; Train detected at block exit,
     ; next state = 3 - Train leaving forward
@@ -996,6 +929,8 @@ CheckExtFwd
 
 
 TrainLeavingF   ; State 3 - Train leaving forward
+
+    bcf     lclState,REVFLG ; Clear line reversed flag for local block
 
     call    LinkRxToN       ; Check link reception timeout
     btfss   STATUS,Z        ; Skip if link timedout ...
@@ -1013,7 +948,7 @@ TrainLeavingF   ; State 3 - Train leaving forward
 
 NextBlockLive
     btfsc   lclState,DETFLG ; Skip if exit detection off ...
-    goto    TrainOnLine     ; ... else remain in current state
+    goto    TrainInBlock    ; ... else remain in current state
 
     ; Train no longer at block exit,
     ; next state = 0 - Block clear
@@ -1040,7 +975,7 @@ CheckTrvRev
 CheckTrvFwd
     ; Check for train traversal of block forwards
     btfsc   prvState,DETFLG ; Skip if entry detection off ...
-    goto    TrainOnLine     ; ... else remain in current state
+    goto    TrainInBlock    ; ... else remain in current state
 
     ; Train no longer at block entrance,
     ; next state = 3 - Train leaving forward
@@ -1052,6 +987,8 @@ CheckTrvFwd
 
 
 TrainEnteringR  ; State 5 - Train entering reverse
+
+    bsf     lclState,REVFLG ; Set line reversed flag for local block
 
 ChkSpnRev
     ; Check for train spanning in reverse
@@ -1068,7 +1005,7 @@ ChkSpnRev
 
 CheckOccRev
     btfsc   lclState,DETFLG ; Skip if exit detection off ...
-    goto    TrainOnLine     ; ... else remain in current state
+    goto    TrainInBlock    ; ... else remain in current state
 
     ; Train no longer at block exit,
     ; next state = 2 - Block occupied
@@ -1081,8 +1018,10 @@ CheckOccRev
 
 TrainLeavingR   ; State 6 - Train leaving reverse
 
+    bcf     lclState,REVFLG ; Clear line reversed flag for local block
+
     btfsc   prvState,DETFLG ; Skip if entry detection off ...
-    goto    TrainOnLine     ; ... else remain in current state
+    goto    TrainInBlock    ; ... else remain in current state
 
     ; Train no longer at block entrance,
     ; next state = 0 - Block clear
@@ -1091,7 +1030,7 @@ TrainLeavingR   ; State 6 - Train leaving reverse
     goto    BlockEnd
 
 
-TrainOnLine ; End of signal block state machine with line occupied
+TrainInBlock ; End of signal block state machine, local block occupied
     movlw   ~ASPSTATE
     andwf   lclState,F      ; Clear signal aspect value bits (= red)
 
@@ -1099,98 +1038,166 @@ BlockEnd    ; End of signal block state machine
 
     ; Set aspect display output
 
-    btfsc   lclState,INHFLG ; Skip if not a forced red aspect display ...
-    goto    RedAspect       ; ... else display red aspect
-
-    movlw   ASPSTATE        ; Test for red aspect required
-    andwf   nxtState,W      ; Aspect state is run by next controller
-    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
-    goto    RedAspect       ; ... else display red aspect
-
-    xorlw   ASPGREEN        ; Test for green aspect required
-    btfsc   STATUS,Z        ; Skip if not zero (not green) ...
-    goto    GreenAspect     ; ... else display green aspect
-
-    andlw   ASPDOUBLE       ; Test for double yellow aspect required
-    btfsc   STATUS,Z        ; Skip if not zero (not double yellow) ...
-    goto    DblYllAspect    ; ... else display double yellow
-
-    ; Display (single) yellow aspect
-    bcf     ASPPORT,DOUBLEOUT
-    bcf     ASPPORT,GREENOUT
-    bsf     ASPPORT,YELLOWOUT
-    bcf     ASPPORT,REDOUT
-    goto    AspectEnd
-
-DblYllAspect
-    ; Display double yellow aspect
-    bsf     ASPPORT,DOUBLEOUT
-    bcf     ASPPORT,GREENOUT
-    bsf     ASPPORT,YELLOWOUT
-    bcf     ASPPORT,REDOUT
-    goto    AspectEnd
-
-GreenAspect
-    ; Display green aspect
-    bcf     ASPPORT,DOUBLEOUT
-    bsf     ASPPORT,GREENOUT
-    bcf     ASPPORT,YELLOWOUT
-    bcf     ASPPORT,REDOUT
-    goto    AspectEnd
-
-RedAspect
-    ; Display red aspect
-    bcf     ASPPORT,DOUBLEOUT
-    bcf     ASPPORT,GREENOUT
-    bcf     ASPPORT,YELLOWOUT
-    bsf     ASPPORT,REDOUT
+    movlw   ~ASPOUTMSK
+    andwf   ASPPORT,F
+    movf    nxtState,W      ; Aspect state is run by next controller
+    call    GetAspectMask
+    iorwf   ASPPORT,F
 
 AspectEnd   ; End of aspect display output
 
     call    SrvcLinkN       ; Service next signal link
     call    SrvcLinkP       ; Service previous signal link
 
+    btfss   lnkPState,LNKDIRFLG ; Skip if not waiting on reply from previous
+    goto    PrevTxEnd           ; ... else skip over previous signal send
+
     ; Encode status for transmission
 
-    swapf   lclState,W      ; Copy status but with nibbles swapped
+    ; Only four bits of signalling status need to be sent so as a simple error
+    ; check these are in low nibble with their ones complement in high nibble
 
-    btfsc   lclState,INHFLG ; Skip if not forced red aspect display ...
-    andlw   ~ASPSTSWP       ; ... else report aspect as red
+    movf    lclState,W      ; Get local signalling status
 
-    movwf   telemData
-    comf    telemData,W     ; One's complement aspect and detection state
-    andlw   0x0F            ; Isolate aspect and detection state (swapped)
-    movwf   telemData
+    andlw   ~DETSTATE       ; Detector state not sent to previous signal
+    btfsc   lclState,REVFLG ; Test if local block line reversed flag is set ...
+    iorlw   NRVSTATE        ; ... if so propagate this to previous block
+    btfsc   nxtState,NRVFLG ; Test if next block line reversed flag is set ...
+    iorlw   NRVSTATE        ; ... if so propagate this to previous block
 
-    movf    lclState,W
-    andlw   0xF0            ; Isolate aspect and detection state (unswapped)
+    iorlw   0x0F            ; Set up for ones complement nibble later
 
-    btfsc   lclState,INHFLG ; Skip if not forced red aspect display ...
-    andlw   ~ASPSTATE       ; ... else report aspect as red
+    movwf   FSR             ; Save local signalling status
 
-    iorwf   telemData,W     ; Combine complemented and uncomplemented data
+    swapf   FSR,F           ; Swap signal status into low nibble and 0xF
 
-    movwf   FSR             ; Load data to be sent into FSR
+    andlw   0xF0            ; Isolate signalling status to be sent
+    xorwf   FSR,F           ; Combined with swapped ones complemnt
 
-    btfsc   cmsState,PRXFLG ; Skip if not waiting for reply from previous ...
-    goto    PrevTxEnd       ; ... else skip over previous signal send
-
-    call    LinkTxP         ; Send data to previous signal
-    btfsc   STATUS,Z        ; Skip if data was not sent ...
-    bsf     cmsState,PRXFLG ; ... else start waiting for reply from previous
+    call    LinkTxP             ; Send data to previous signal
+    btfsc   STATUS,Z            ; Skip if data was not sent ...
+    bcf     lnkPState,LNKDIRFLG ; ... else start waiting on reply from previous
 
 PrevTxEnd
 
-    btfss   cmsState,NTXFLG ; Skip if replying to next signal ...
-    goto    NextTxEnd       ; ... else skip over next signal send
+    btfss   lnkNState,LNKDIRFLG ; Skip if replying to next signal ...
+    goto    NextTxEnd           ; ... else skip over next signal send
 
-    call    LinkTxN         ; Send data to next signal
-    btfsc   STATUS,Z        ; Skip if data was not sent ...
-    bcf     cmsState,NTXFLG ; ... resume listening to next signal
+    ; Encode status for transmission
+
+    ; Only four bits of signalling status need to be sent so as a simple error
+    ; check these are in low nibble with their ones complement in high nibble
+
+    movf    lclState,W      ; Get local signalling status
+
+    iorlw   0x0F            ; Set up for ones complement nibble later
+
+    movwf   FSR             ; Save local signalling status
+    swapf   FSR,F           ; Swap signal status into low nibble and 0xF
+
+    andlw   0xF0            ; Isolate signalling status to be sent
+    xorwf   FSR,F           ; Combined with swapped ones complemnt
+
+    call    LinkTxN             ; Send data to next signal
+    btfsc   STATUS,Z            ; Skip if data was not sent ...
+    bcf     lnkNState,LNKDIRFLG ; ... resume listening to next signal
 
 NextTxEnd
 
     goto    Main            ; End of main processing loop
+
+
+;**********************************************************************
+; Subroutine to return aspect output mask in accumulator
+;**********************************************************************
+GetAspectMask
+    andlw   ASPSTATE        ; Test for red aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
+    retlw   REDMSK          ; ... else display red aspect
+
+    xorlw   ASPGREEN        ; Test for green aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not green) ...
+    retlw   GREENMSK        ; ... else display green aspect
+
+    andlw   ASPDOUBLE       ; Test for double yellow aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not double yellow) ...
+    retlw   DBLYLWMSK       ; ... else display double yellow
+
+    retlw   YELLOWMSK       ; By default display yellow
+
+
+;**********************************************************************
+; Instance next signal interface routine macros                       *
+;**********************************************************************
+
+EnableRxN   EnableRx  RXNTRIS, RXNPORT, RXNBIT
+    return
+
+InitRxN     InitRx  srlIfStat, serNTimer, serNBitCnt, serNReg, RXNFLG, RXNERR, RXNBREAK, RXNSTOP
+    return
+
+SrvcRxN     ServiceRx srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, RXNPORT, RXNBIT, INTSERINI, INTSERBIT, RXNERR, RXNBREAK, RXNSTOP, RXNFLG
+
+SerRxN      SerialRx srlIfStat, serNBffr, RXNFLG
+
+EnableTxN   EnableTx  TXNTRIS, TXNPORT, TXNBIT
+    return
+
+InitTxN     InitTx  srlIfStat, serNTimer, serNBitCnt, serNReg, TXNFLG, TXNBREAK
+    return
+
+SrvcTxN     ServiceTx srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, TXNPORT, TXNBIT, RXNPORT, RXNBIT, INTSERBIT, TXNFLG, TXNBREAK
+
+SerTxN      SerialTx srlIfStat, serNBffr, TXNFLG
+
+IsTxIdleN   IsTxIdle serNBitCnt
+    return
+
+SrvcLinkN   SrvcLink   lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, IsTxIdleN, EnableRxN, InitRxN
+
+LinkRxN     LinkRx lnkNState, SerRxN
+
+LinkTxN     LinkTx lnkNState, SerTxN
+
+LinkRxToN   IsLinkRxTo lnkNState, lnkNTimer
+    return
+
+
+;**********************************************************************
+; Instance previous signal interface routine macros                   *
+;**********************************************************************
+
+EnableRxP   EnableRx  RXPTRIS, RXPPORT, RXPBIT
+    return
+
+InitRxP     InitRx  srlIfStat, serPTimer, serPBitCnt, serPReg, RXPFLG, RXPERR, RXPBREAK, RXPSTOP
+    return
+
+SrvcRxP     ServiceRx srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, RXPPORT, RXPBIT, INTSERINI, INTSERBIT, RXPERR, RXPBREAK, RXPSTOP, RXPFLG
+
+SerRxP      SerialRx srlIfStat, serPBffr, RXPFLG
+
+EnableTxP   EnableTx  TXPTRIS, TXPPORT, TXPBIT
+    return
+
+InitTxP     InitTx  srlIfStat, serPTimer, serPBitCnt, serPReg, TXPFLG, TXPBREAK
+    return
+
+SrvcTxP     ServiceTx srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, TXPPORT, TXPBIT, RXPPORT, RXPBIT, INTSERBIT, TXPFLG, TXPBREAK
+
+SerTxP      SerialTx srlIfStat, serPBffr, TXPFLG
+
+IsTxIdleP   IsTxIdle serPBitCnt
+    return
+
+SrvcLinkP   SrvcLink   lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, IsTxIdleP, EnableRxP, InitRxP
+
+LinkRxP     LinkRx lnkPState, SerRxP
+
+LinkTxP     LinkTx lnkPState, SerTxP
+
+LinkRxToP   IsLinkRxTo lnkPState, lnkPTimer
+    return
 
 
 ;**********************************************************************
