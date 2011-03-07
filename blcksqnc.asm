@@ -43,6 +43,20 @@
 ;       USA.                                                          *
 ;                                                                     *
 ;**********************************************************************
+;                                                                     *
+;                           +---+ +---+                               *
+;             Emitter  <- RA2|1  |_| 18|RA1                           *
+;              Sensor  -> RA3|2      17|RA0                           *
+;          !Detecting  <- RA4|3      16|                              *
+;                            |4      15|                              *
+;                            |5      14|      Aspects:                *
+;                         RB0|6      13|RB7 -> Red                    *
+; Next <-> / !Inhibit  -> RB1|7      12|RB6 -> Yellow                 *
+;            Previous <-> RB2|8      11|RB5 -> Double yellow          *
+;       Special speed  -> RB3|9      10|RB4 -> Green                  *
+;                            +---------+                              *
+;                                                                     *
+;**********************************************************************
 
 
 ;**********************************************************************
@@ -96,14 +110,10 @@ RTCCINT     EQU     160         ; 10KHz = (1MHz / 100)
 
 INTSERINI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
 INTSERBIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
-INTLNKDLYRX EQU     0           ; Interrupt cycles for link Rx turnaround delay
-INTLNKDLYTX EQU     0           ; Interrupt cycles for link Tx turnaround delay
-INTLINKTMOP EQU     25          ; Interrupt cycles for previous link Rx timeout
-INTLINKTMON EQU     250         ; Interrupt cycles for next link Rx timeout
-
-#if (0 < high (INTSERINI | INTSERBIT | INTLNKDLYRX | INTLNKDLYTX | INTLINKTMOP | INTLINKTMON))
-    error "Timer values must be less than 0xFF to avoid overflow"
-#endif
+INTLNKDLYRX EQU     1           ; Interrupt cycles for link Rx turnaround delay
+INTLNKDLYTX EQU     1           ; Interrupt cycles for link Tx turnaround delay
+INTLINKTMOP EQU     35          ; Interrupt cycles for previous link Rx timeout
+INTLINKTMON EQU     255         ; Interrupt cycles for next link Rx timeout
 
 ; Next controller serial interface constants (see 'asyn_srl.inc')
 RXNFLG      EQU     0           ; Receive byte buffer 'loaded' status bit
@@ -321,7 +331,7 @@ nxtCntlr        ; Status received from next controller
                 ;   bits 0,3 - Ignored (ones complement of bits 4 to 7)
                 ;   bit 4    - Special speed
                 ;   bit 5    - Line reversed
-                ;   bits 6,7 - Aspect value (as for this controller)
+                ;   bits 6,7 - Aspect value (bits as for this controller)
 
 prvCntlr        ; Status received from previous controller
                 ;   bit 0    - Ignored
@@ -330,7 +340,7 @@ prvCntlr        ; Status received from previous controller
                 ; Status sent to previous controller
                 ;   bit 4    - Special speed
                 ;   bit 5    - Line reversed
-                ;   bits 6,7 - Aspect value (as for this controller)
+                ;   bits 6,7 - Aspect value (bits as for this controller)
 
 aspectTime      ; Aspect interval for simulating next signal
 nxtTimer        ; Second counter for simulating next signal
@@ -453,6 +463,25 @@ EndISR
     swapf   w_isr,W         ; Swap pre-isr W register into W register
 
     retfie                  ; return from Interrupt
+
+
+;**********************************************************************
+; Subroutine to return aspect output mask in accumulator
+;**********************************************************************
+GetAspectMask
+    andlw   ASPSTATE        ; Test for red aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
+    retlw   REDMSK          ; ... else display red aspect
+
+    xorlw   ASPGREEN        ; Test for green aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not green) ...
+    retlw   GREENMSK        ; ... else display green aspect
+
+    andlw   ASPDOUBLE       ; Test for double yellow aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not double yellow) ...
+    retlw   DBLYLWMSK       ; ... else display double yellow
+
+    retlw   YELLOWMSK       ; By default display yellow
 
 
 ;**********************************************************************
@@ -704,6 +733,7 @@ CheckPrevRx
 
 PrevRxDone
     bsf     lnkPState,LNKDIRFLG ; Resume sending to previous controller
+    bsf     lnkPState,LNKSYNFLG ; Synchronising link before sending data
 
 PrevLinkEnd
 
@@ -745,8 +775,6 @@ CheckNextRx
     btfss   STATUS,Z        ; Skip if data received ...
     goto    NextRxEnd       ; ... else skip over next controller receive
 
-    bcf     lclCntlr,INHFLG ; Link is not timed out so ignore inhibit input
-
     movwf   FSR             ; Store the received data
 
     ; As a simple error check received data is ignored unless same value
@@ -778,9 +806,18 @@ NextRxEnd
     ;******************************************************************
 
     call    LinkRxToN       ; Check link reception timeout
-    btfss   STATUS,Z        ; Skip if link timedout ...
+    btfsc   STATUS,Z        ; Skip if link timedout ...
+    goto    NextLinkFailed  ; ... else handle link failure
+
+    ; Signal inhibit input cannot be read until link has timed out
+    bcf     lclCntlr,INHFLG
+    bsf     inputs,INHBIT
+    bsf     debnce,INHBIT
+
     goto    NextLinkEnd     ; ... else keep waiting for data
 
+
+NextLinkFailed
     ; Next controller link timed out, simulate it
     ;******************************************************************
 
@@ -813,7 +850,7 @@ NextSignalEnd
 NextLinkEnd
 
     ; Unless the local signal is inhibited this controller normally displays
-    ; the signal aspect for the next block
+    ; the signal aspect for the next block (either received or simulated)
 
     movlw   ~ASPSTATE
     andwf   lclCntlr,F      ; Clear signal aspect value bits
@@ -940,6 +977,8 @@ TrainLeavingF   ; State 3 - Train leaving forward
     btfsc   lclCntlr,EXTFLG ; Skip if exit detection off ...
     goto    ChkTrnRvd       ; ... else check if train now spans this block
 
+    ; Train has left block
+
     ; In case simulating next controller set next signal aspect value to red
     ; and reset the aspect timer to simulate train traversing next block
     movlw   ~ASPSTATE
@@ -1051,25 +1090,6 @@ BlockEnd    ; End of signal block state machine
 
 
 ;**********************************************************************
-; Subroutine to return aspect output mask in accumulator
-;**********************************************************************
-GetAspectMask
-    andlw   ASPSTATE        ; Test for red aspect required
-    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
-    retlw   REDMSK          ; ... else display red aspect
-
-    xorlw   ASPGREEN        ; Test for green aspect required
-    btfsc   STATUS,Z        ; Skip if not zero (not green) ...
-    retlw   GREENMSK        ; ... else display green aspect
-
-    andlw   ASPDOUBLE       ; Test for double yellow aspect required
-    btfsc   STATUS,Z        ; Skip if not zero (not double yellow) ...
-    retlw   DBLYLWMSK       ; ... else display double yellow
-
-    retlw   YELLOWMSK       ; By default display yellow
-
-
-;**********************************************************************
 ; Instance next block interface routine macros
 ;**********************************************************************
 
@@ -1079,9 +1099,9 @@ EnableRxN   EnableRx  RXNTRIS, RXNPORT, RXNBIT
 InitRxN     InitRx  srlIfStat, serNTimer, serNBitCnt, serNReg, RXNFLG, RXNERR, RXNBREAK, RXNSTOP
     return
 
-SrvcRxN     ServiceRx srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, RXNPORT, RXNBIT, INTSERINI, INTSERBIT, RXNERR, RXNBREAK, RXNSTOP, RXNFLG
+SrvcRxN     ServiceRx  srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, RXNPORT, RXNBIT, INTSERINI, INTSERBIT, RXNERR, RXNBREAK, RXNSTOP, RXNFLG
 
-SerRxN      SerialRx srlIfStat, serNBffr, RXNFLG
+SerRxN      SerialRx  srlIfStat, serNBffr, RXNFLG
 
 EnableTxN   EnableTx  TXNTRIS, TXNPORT, TXNBIT
     return
@@ -1089,20 +1109,22 @@ EnableTxN   EnableTx  TXNTRIS, TXNPORT, TXNBIT
 InitTxN     InitTx  srlIfStat, serNTimer, serNBitCnt, serNReg, TXNFLG, TXNBREAK
     return
 
-SrvcTxN     ServiceTx srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, TXNPORT, TXNBIT, RXNPORT, RXNBIT, INTSERBIT, TXNFLG, TXNBREAK
+TxBreakN    TxBreak  srlIfStat, TXNBREAK
 
-SerTxN      SerialTx srlIfStat, serNBffr, TXNFLG
+SrvcTxN     ServiceTx  srlIfStat, serNTimer, serNBitCnt, serNReg, serNBffr, TXNPORT, TXNBIT, RXNPORT, RXNBIT, INTSERBIT, TXNFLG, TXNBREAK
 
-IsTxIdleN   IsTxIdle serNBitCnt
+SerTxN      SerialTx  srlIfStat, serNBffr, TXNFLG
+
+IsTxIdleN   IsTxIdle  serNBitCnt
     return
 
-SrvcLinkN   SrvcLink   lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, IsTxIdleN, EnableRxN, InitRxN
+SrvcLinkN   SrvcLink  lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, IsTxIdleN, TxBreakN, EnableRxN, InitRxN
 
-LinkRxN     LinkRx lnkNState, SerRxN
+LinkRxN     LinkRx  lnkNState, SerRxN
 
-LinkTxN     LinkTx lnkNState, SerTxN
+LinkTxN     LinkTx  lnkNState, SerTxN
 
-LinkRxToN   IsLinkRxTo lnkNState, lnkNTimer
+LinkRxToN   IsLinkRxTo  lnkNState, lnkNTimer
     return
 
 
@@ -1116,9 +1138,9 @@ EnableRxP   EnableRx  RXPTRIS, RXPPORT, RXPBIT
 InitRxP     InitRx  srlIfStat, serPTimer, serPBitCnt, serPReg, RXPFLG, RXPERR, RXPBREAK, RXPSTOP
     return
 
-SrvcRxP     ServiceRx srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, RXPPORT, RXPBIT, INTSERINI, INTSERBIT, RXPERR, RXPBREAK, RXPSTOP, RXPFLG
+SrvcRxP     ServiceRx  srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, RXPPORT, RXPBIT, INTSERINI, INTSERBIT, RXPERR, RXPBREAK, RXPSTOP, RXPFLG
 
-SerRxP      SerialRx srlIfStat, serPBffr, RXPFLG
+SerRxP      SerialRx  srlIfStat, serPBffr, RXPFLG
 
 EnableTxP   EnableTx  TXPTRIS, TXPPORT, TXPBIT
     return
@@ -1126,20 +1148,22 @@ EnableTxP   EnableTx  TXPTRIS, TXPPORT, TXPBIT
 InitTxP     InitTx  srlIfStat, serPTimer, serPBitCnt, serPReg, TXPFLG, TXPBREAK
     return
 
-SrvcTxP     ServiceTx srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, TXPPORT, TXPBIT, RXPPORT, RXPBIT, INTSERBIT, TXPFLG, TXPBREAK
+TxBreakP    TxBreak  srlIfStat, TXPBREAK
 
-SerTxP      SerialTx srlIfStat, serPBffr, TXPFLG
+SrvcTxP     ServiceTx  srlIfStat, serPTimer, serPBitCnt, serPReg, serPBffr, TXPPORT, TXPBIT, RXPPORT, RXPBIT, INTSERBIT, TXPFLG, TXPBREAK
 
-IsTxIdleP   IsTxIdle serPBitCnt
+SerTxP      SerialTx  srlIfStat, serPBffr, TXPFLG
+
+IsTxIdleP   IsTxIdle  serPBitCnt
     return
 
-SrvcLinkP   SrvcLink   lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, IsTxIdleP, EnableRxP, InitRxP
+SrvcLinkP   SrvcLink  lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, IsTxIdleP, TxBreakP, EnableRxP, InitRxP
 
-LinkRxP     LinkRx lnkPState, SerRxP
+LinkRxP     LinkRx  lnkPState, SerRxP
 
-LinkTxP     LinkTx lnkPState, SerTxP
+LinkTxP     LinkTx  lnkPState, SerTxP
 
-LinkRxToP   IsLinkRxTo lnkPState, lnkPTimer
+LinkRxToP   IsLinkRxTo   lnkPState, lnkPTimer
     return
 
 
