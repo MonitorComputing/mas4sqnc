@@ -296,9 +296,8 @@ secCount        ; Scaled interrupts counter for second timing
 
 snsAcc          ; Detector sensor match (emitter state) accumulator
 
-detAcc          ; Detection input debounce accumulator
-inhAcc          ; Inhibit input debounce accumulator
-spdAcc          ; Speed input debounce accumulator
+debnce
+inputs
 
 lclCntlr        ; Status of this controller
                 ;   bits 0,2 - Occupation block state
@@ -511,6 +510,10 @@ ClearRAM
 
     incf    snsAcc,F        ; Prevent accumulator rollover down through zero
 
+    ; Inputs are active low so initialise debounce for all off
+    comf    debnce,F
+    comf    inputs,F
+
     ; Initialise timing
     ;******************************************************************
 
@@ -559,14 +562,42 @@ Timing
     ; service routine) the count is tested and if found to be 1 it is reset
     ; and the various timing operations are performed.
 
+    ; Scale interrupts for to lower than 10KHz
+    ;******************************************************************
+
     decfsz  intScCount,W    ; Test interrupts scaling counter
     goto    TimingEnd       ; Skip if a interrupt scaling has not elapsed
 
     movlw   INTSCLNG        ; Reload interrupt scaling counter
     movwf   intScCount
 
+    ; Perform input debouncing
+    ;******************************************************************
+
+    movf    PORTA,W         ; Get current port A bits
+    andlw   0xF0            ; Discard bits 0 to 3
+    movwf   FSR             ; Save current bits 4 to 7
+
+    movf    PORTB,W         ; Get current port B bits
+    andlw   0x0F            ; Discard bits 4 to 7
+    iorwf   FSR,F           ; Combine with saved port A bits
+
+    movf    FSR,W           ; Get combined new port inputs
+    xorwf   debnce,W        ; Create a mask of mismatched old and new inputs
+    andwf   inputs,F        ; Keep previous debounced inputs for mismatches
+
+    xorlw   0xFF            ; Flip mask to be for matched old and new inputs
+    andwf   FSR,W           ; Get matched new debounced inputs
+    iorwf   inputs,F        ; Combine with kept previous debounced inputs
+
+    movf    FSR,W           ; Save combined new port bits ...
+    movwf   debnce          ; ... for next debounce cycle
+
     decfsz  secCount,F      ; Decrement seconds scaled interrupts counter ...
     goto    TimingEnd       ; ... skipping this jump if it has reached zero
+
+    ; Run one second timing
+    ;******************************************************************
 
     movlw   SECSCLNG        ; Reload one second ...
     movwf   secCount        ; ... scaled interrupts counter low byte
@@ -589,52 +620,18 @@ TimingEnd
     ; Check status of train detection input (active low)
     ;******************************************************************
 
-    btfsc   DETPORT,DETBIT  ; Skip if detection input is on (active low) ...
-    goto    DecDetectionAcc ; ... else jump if on
-
-    incf    detAcc,W        ; Increment train detection debounce accumulator
-    btfss   STATUS,Z        ; Skip if rolled over to zero ...
-    movwf   detAcc          ; ... else update the train detection accumulator
-
-    btfsc   detAcc,INPACTV  ; Skip if below on threshold ...
+    btfsc   inputs,DETBIT   ; Skip if detection input is on (active low) ...
+    bcf     lclCntlr,EXTFLG ; ... else set detection state to off
+    btfss   inputs,DETBIT   ; Skip if detection input is off (active low) ...
     bsf     lclCntlr,EXTFLG ; ... else set detection state to on
-    goto    DetectionEnd    
-
-DecDetectionAcc
-    movf    detAcc,F        ; Test train detection debounce accumulator
-
-    btfss   STATUS,Z        ; Skip if zero ...
-    decf    detAcc,F        ; ... else decrement the accumulator
-
-    btfsc   STATUS,Z        ; Skip if above off threshold (not zero) ...
-    bcf     lclCntlr,EXTFLG ; ... else set train detection state to off
-
-DetectionEnd
 
     ; Check status of special speed input (active low)
     ;******************************************************************
 
-    btfsc   SPDPORT,SPDBIT  ; Skip if special speed is on (active low) ...
-    goto    DecSpeedAcc     ; ... else jump if not set
-
-    incf    spdAcc,W        ; Increment special speed debounce accumulator
-    btfss   STATUS,Z        ; Skip if rolled over to zero ...
-    movwf   spdAcc          ; ... else update special speed input accumulator
-
-    btfsc   spdAcc,INPACTV  ; Skip if below on threshold ...
+    btfsc   inputs,SPDBIT   ; Skip if special speed is on (active low) ...
+    bcf     prvCntlr,SPDFLG ; ... else set speed state to normal
+    btfss   inputs,SPDBIT   ; Skip if special speed is off (active low) ...
     bsf     prvCntlr,SPDFLG ; ... else set speed state to special
-    goto    SpeedEnd   
-
-DecSpeedAcc
-    movf    spdAcc,F        ; Test special speed input debounce accumulator
-
-    btfss   STATUS,Z        ; Skip if reached zero ...
-    decf    spdAcc,F        ; ... else decrement the accumulator
-
-    btfsc   STATUS,Z        ; Skip if above off threshold (not zero) ...
-    bcf     prvCntlr,SPDFLG ; ... else set speed state to special
-
-SpeedEnd
 
     ; Service link with previous controller
     ;******************************************************************
@@ -748,10 +745,7 @@ CheckNextRx
     btfss   STATUS,Z        ; Skip if data received ...
     goto    NextRxEnd       ; ... else skip over next controller receive
 
-    ; As next block link is not timed out then ignore inhibit input
-    bcf     lclCntlr,INHFLG ; Reset inhibit input for automatic free run
-    clrf    inhAcc          ; Clear inhibit input debounce accumulator
-    incf    inhAcc,F        ; Prevent rollover down through zero
+    bcf     lclCntlr,INHFLG ; Link is not timed out so ignore inhibit input
 
     movwf   FSR             ; Store the received data
 
@@ -811,27 +805,10 @@ NextSignalEnd
     ; Next controller link timed out, check signal inhibit input (active low)
     ;******************************************************************
 
-    btfsc   INHPORT,INHBIT  ; Skip if inhibit input is on (active low) ...
-    goto    DecInhibitAcc   ; ... else jump if on
-
-    incf    inhAcc,W        ; Increment signal inhibit accumulator
-    btfss   STATUS,Z        ; Skip if not rolled over to zero ...
-    movwf   inhAcc          ; ... else update the signal inhibit accumulator
-
-    btfsc   inhAcc,INPACTV  ; Skip if below on threshold ...
-    bsf     lclCntlr,INHFLG ; ... else set signal inhibit state to on
-    goto    InhibitEnd   
-
-DecInhibitAcc
-    decf    inhAcc,W        ; Decrement inhibit input accumulator
-
-    btfss   STATUS,Z        ; Skip if reached zero ...
-    movwf   inhAcc          ; ... else update the accumulator
-
-    btfsc   STATUS,Z        ; Skip if above on threshold (not reached zero) ...
-    bcf     lclCntlr,INHFLG ; ... else set signal inhibit state to off
-
-InhibitEnd
+    btfsc   inputs,INHBIT   ; Skip if inhibit input is on (active low) ...
+    bcf     lclCntlr,INHFLG ; ... else set signal inhibit to off
+    btfss   inputs,INHBIT   ; Skip if inhibit input is off (active low) ...
+    bsf     lclCntlr,INHFLG ; ... else set signal inhibit to on
 
 NextLinkEnd
 
