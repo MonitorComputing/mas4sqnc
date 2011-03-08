@@ -110,6 +110,11 @@ PORTBSTATUS EQU     B'00001011'
 ; Interrupt & timing constants
 RTCCINT     EQU     160         ; 10KHz = ((4MHz / 4) / 100)
 
+; Timing constants
+INTSCLNG    EQU     80 + 1      ; Interrupts scaling for seconds
+SECSCLNG    EQU     125         ; Scaled interrupts per second
+HALFSEC     EQU     B'11000000' ; Roughly half second scaled interrupts mask
+
 INTSERINI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
 INTSERBIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
 INTLNKDLYRX EQU     0           ; Interrupt cycles for link Rx turnaround delay
@@ -147,11 +152,6 @@ TXPTRIS     EQU     TRISB       ; Tx port direction register
 TXPPORT     EQU     PORTB       ; Tx port data register
 TXPBIT      EQU     RXPBIT      ; Tx output bit
 
-; Timing constants
-INTSCLNG    EQU     80 + 1      ; Interrupts scaling for seconds
-SECSCLNG    EQU     125         ; Scaled interrupts per second
-HALFSEC     EQU     B'11000000' ; Roughly half second scaled interrupts mask
-
 ; Detector I/O constants
 EMTPORT     EQU     PORTA       ; Emitter drive port
 EMTBIT      EQU     2           ; Emmitter drive bit (active low)
@@ -183,6 +183,7 @@ ASPRED      EQU     B'00000000' ; Red aspect value
 ASPYELLOW   EQU     B'01000000' ; Yellow aspect value mask
 ASPDOUBLE   EQU     B'10000000' ; Double yellow aspect value mask
 ASPGREEN    EQU     B'11000000' ; Green aspect value
+ASPDGFLG    EQU     7           ; Green or double yellow value flag bit
 ASPINCR     EQU     B'01000000' ; Aspect value increment
 ASPSTATE    EQU     B'11000000' ; Aspect value mask
 
@@ -310,7 +311,7 @@ snsAcc          ; Detector sensor match (emitter state) accumulator
 
 debnce
 inputs
-aspout
+aspOut
 
 lclCntlr        ; Status of this controller
                 ;   bits 0,2 - Occupation block state
@@ -402,31 +403,29 @@ IntVector
     ;******************************************************************
 
     decf    serNTimer,W     ; Decrement serial timing counter
-    btfsc   STATUS,Z        ; Skip if not zero ...
-    goto    SrvcLinkN       ; ... else service the link
+    btfss   STATUS,Z        ; Skip if zero ...
+    goto    SkipLinkN       ; ... else skip servicing the link
 
-    movwf   serNTimer       ; Update the timer
-    goto    SkipLinkN
-
-SrvcLinkN
     SrvcLink  lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, SrvcTxN, IsTxIdleN, TxBreakN, EnableRxN, InitRxN, SrvcRxN
 
+    movf    serNTimer,W     ; Get new serial timing counter value
+
 SkipLinkN
+    movwf   serNTimer       ; Update the serial timing counter
 
     ; Service previous controller link
     ;******************************************************************
 
     decf    serPTimer,W     ; Decrement serial timing counter
-    btfsc   STATUS,Z        ; Skip if not zero ...
-    goto    SrvcLinkP       ; ... else service the link
+    btfss   STATUS,Z        ; Skip if not zero ...
+    goto    SkipLinkP       ; ... else skip servicing the link
 
-    movwf   serPTimer       ; Update the timer
-    goto    SkipLinkP
-
-SrvcLinkP
     SrvcLink  lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, SrvcTxP, IsTxIdleP, TxBreakP, EnableRxP, InitRxP, SrvcRxP
 
+    movf    serPTimer,W     ; Get new serial timing counter value
+
 SkipLinkP
+    movwf   serPTimer       ; Update the timer
 
     ; Run interrupt scaling counter for second timing
     ;******************************************************************
@@ -471,7 +470,7 @@ SensorEnd
     ; Output aspect display
     ;******************************************************************
 
-    movf    aspout,W
+    call    GetAspectMask
     iorwf   ASPPORT,F
     iorlw   ~ASPOUTMSK
     andwf   ASPPORT,F
@@ -494,7 +493,7 @@ EndISR
 ; Subroutine to return aspect output mask in accumulator
 ;**********************************************************************
 GetAspectMask
-    andlw   ASPSTATE        ; Test for red aspect required
+    movf    aspOut,W            ; Get aspect display value
     btfsc   STATUS,Z        ; Skip if not zero (not red) ...
     retlw   REDMSK          ; ... else display red aspect
 
@@ -502,11 +501,24 @@ GetAspectMask
     btfsc   STATUS,Z        ; Skip if not zero (not green) ...
     retlw   GREENMSK        ; ... else display green aspect
 
-    andlw   ASPDOUBLE       ; Test for double yellow aspect required
-    btfsc   STATUS,Z        ; Skip if not zero (not double yellow) ...
-    retlw   DBLYLWMSK       ; ... else display double yellow
+    movlw   HALFSEC
+    andwf   secCount,w      ; Test for flashing aspect blanking period
 
-    retlw   YELLOWMSK       ; By default display yellow
+    btfss   aspOut,ASPDGFLG ; Skip if double yellow required ...
+    goto    GetYellowAspect ; ... else display yellow aspect
+
+    movlw   0               ; Blank aspect display
+    btfsc   nxtCntlr,SPDFLG ; Skip if next signal not at special speed ...
+    btfss   STATUS,Z        ; ... else skip if aspect blanking period ...
+    movlw   DBLYLWMSK       ; ... else display double yellow aspect
+    return
+
+GetYellowAspect
+    movlw   0               ; Blank aspect display
+    btfsc   prvCntlr,SPDFLG ; Skip if local signal not at special speed ...
+    btfss   STATUS,Z        ; ... else skip if aspect blanking period ...
+    movlw   YELLOWMSK       ; ... else display yellow aspect
+    return
 
 
 ;**********************************************************************
@@ -580,16 +592,6 @@ ClearRAM
     BANKSEL TMR0
     movwf   aspectTime      ; Initialise aspect interval for next signal
     movwf   nxtTimer        ; Initialise timer used to simulate next signal
-
-    ; Initialise next block link to receive
-    ;******************************************************************
-
-    call    InitRxN
-
-    ; Initialise previous block link to transmit
-    ;******************************************************************
-
-    call    InitTxP
 
     ; Initialise interrupts
     ;******************************************************************
@@ -874,10 +876,15 @@ NextLinkEnd
     ; the signal aspect for the next block (either received or simulated)
 
     movlw   ~ASPSTATE
-    andwf   lclCntlr,F      ; Clear signal aspect value bits
+    andwf   lclCntlr,F      ; Clear local signal aspect value bits
 
     movlw   ASPSTATE
-    andwf   nxtCntlr,W      ; Get signal aspect from next block controller
+    andwf   nxtCntlr,W      ; Get local signal aspect from next controller
+
+    btfsc   prvCntlr,SPDFLG ; Skip if local signal not at special speed ...
+    movlw   ASPYELLOW       ; ... else restrict aspect to yellow ...
+    btfsc   STATUS,Z        ; ... if signal aspect from next is red ...
+    clrw                    ; ... restore aspect to red
 
     btfss   lclCntlr,INHFLG ; Skip if signal is line inhibited ...
     iorwf   lclCntlr,F      ; ... else use the signal aspect for display
@@ -1097,9 +1104,9 @@ BlockEnd    ; End of signal block state machine
     ; Get aspect display value
     ;******************************************************************
 
-    movf    lclCntlr,W
-    call    GetAspectMask
-    movwf   aspout
+    movf    lclCntlr,W      ; Get controller status
+    andlw   ASPSTATE        ; Isolate aspect value
+    movwf   aspOut          ; Save as aspect display value
 
 
     ;******************************************************************
