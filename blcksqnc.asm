@@ -44,7 +44,7 @@
 ;                                                                     *
 ;**********************************************************************
 ;                                                                     *
-;                           +---+ +---+                               *
+;                            +---+ +---+                              *
 ;             Emitter  <- RA2|1  |_| 18|RA1                           *
 ;              Sensor  -> RA3|2      17|RA0                           *
 ;          !Detecting  <- RA4|3      16|                              *
@@ -80,7 +80,9 @@
 ; See respective data sheet for additional information on configuration word.
 
 ; Include serial link interface macros
+#define CLKD_SERIAL
 #include <\dev\projects\utility\pic\asyn_srl.inc>
+#define CLKD_LINK
 #include <\dev\projects\utility\pic\link_hd.inc>
 
 
@@ -106,12 +108,12 @@ PORTASTATUS EQU     B'00001000'
 PORTBSTATUS EQU     B'00001011'
 
 ; Interrupt & timing constants
-RTCCINT     EQU     160         ; 10KHz = (1MHz / 100)
+RTCCINT     EQU     160         ; 10KHz = ((4MHz / 4) / 100)
 
 INTSERINI   EQU     6           ; Interrupts per initial Rx serial bit @ 2K5
 INTSERBIT   EQU     4           ; Interrupts per serial bit @ 2K5 baud
-INTLNKDLYRX EQU     1           ; Interrupt cycles for link Rx turnaround delay
-INTLNKDLYTX EQU     1           ; Interrupt cycles for link Tx turnaround delay
+INTLNKDLYRX EQU     0           ; Interrupt cycles for link Rx turnaround delay
+INTLNKDLYTX EQU     4           ; Interrupt cycles for link Tx turnaround delay
 INTLINKTMOP EQU     35          ; Interrupt cycles for previous link Rx timeout
 INTLINKTMON EQU     255         ; Interrupt cycles for next link Rx timeout
 
@@ -308,6 +310,7 @@ snsAcc          ; Detector sensor match (emitter state) accumulator
 
 debnce
 inputs
+aspout
 
 lclCntlr        ; Status of this controller
                 ;   bits 0,2 - Occupation block state
@@ -398,18 +401,32 @@ IntVector
     ; Service next controller link
     ;******************************************************************
 
-    decfsz  serNTimer,W     ; Decrement serial timing counter, skip if zero ...
-    movwf   serNTimer       ; ... else update the counter
+    decf    serNTimer,W     ; Decrement serial timing counter
+    btfsc   STATUS,Z        ; Skip if not zero ...
+    goto    SrvcLinkN       ; ... else service the link
 
-    SrvcLinkIf  lnkNState, lnkNTimer, LINKTMON, SrvcTxN, SrvcRxN
+    movwf   serNTimer       ; Update the timer
+    goto    SkipLinkN
+
+SrvcLinkN
+    SrvcLink  lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, SrvcTxN, IsTxIdleN, TxBreakN, EnableRxN, InitRxN, SrvcRxN
+
+SkipLinkN
 
     ; Service previous controller link
     ;******************************************************************
 
-    decfsz  serPTimer,W     ; Decrement serial timing counter, skip if zero ...
-    movwf   serPTimer       ; ... else update the counter
+    decf    serPTimer,W     ; Decrement serial timing counter
+    btfsc   STATUS,Z        ; Skip if not zero ...
+    goto    SrvcLinkP       ; ... else service the link
 
-    SrvcLinkIf  lnkPState, lnkPTimer, LINKTMOP, SrvcTxP, SrvcRxP
+    movwf   serPTimer       ; Update the timer
+    goto    SkipLinkP
+
+SrvcLinkP
+    SrvcLink  lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, SrvcTxP, IsTxIdleP, TxBreakP, EnableRxP, InitRxP, SrvcRxP
+
+SkipLinkP
 
     ; Run interrupt scaling counter for second timing
     ;******************************************************************
@@ -450,6 +467,14 @@ EmitterOn
     bsf     EMTPORT,EMTBIT  ; Turn emitter off (active low)
 
 SensorEnd
+
+    ; Output aspect display
+    ;******************************************************************
+
+    movf    aspout,W
+    iorwf   ASPPORT,F
+    iorlw   ~ASPOUTMSK
+    andwf   ASPPORT,F
 
     ; Exit Interrupt Service Routine
     ;******************************************************************
@@ -622,11 +647,11 @@ Timing
     movf    FSR,W           ; Save combined new port bits ...
     movwf   debnce          ; ... for next debounce cycle
 
-    decfsz  secCount,F      ; Decrement seconds scaled interrupts counter ...
-    goto    TimingEnd       ; ... skipping this jump if it has reached zero
-
     ; Run one second timing
     ;******************************************************************
+
+    decfsz  secCount,F      ; Decrement seconds scaled interrupts counter ...
+    goto    TimingEnd       ; ... skipping this jump if it has reached zero
 
     movlw   SECSCLNG        ; Reload one second ...
     movwf   secCount        ; ... scaled interrupts counter low byte
@@ -665,8 +690,6 @@ TimingEnd
     ; Service link with previous controller
     ;******************************************************************
 
-    call    SrvcLinkP           ; Service previous controller link
-
     btfss   lnkPState,LNKDIRFLG ; Skip if not waiting on reply from previous
     goto    CheckPrevRx         ; ... else skip over previous controller send
 
@@ -674,20 +697,20 @@ TimingEnd
     ;******************************************************************
 
     ; Only four bits of signalling status need to be sent so as a simple error
-    ; check these are in low nibble with their ones complement in high nibble
+    ; check these are sent in low nibble with ones complement in high nibble
 
     movf    prvCntlr,W      ; Get status for previous controller
 
     btfsc   nxtCntlr,REVFLG ; Test if next block line reversed flag is set ...
     iorlw   REVMSK          ; ... if so propagate this to previous controller
 
-    iorlw   0x0F            ; Set up for ones complement low nibble later
+    iorlw   0x0F            ; Set up for ones complement high nibble later
 
     movwf   FSR             ; Save local signalling status
-    swapf   FSR,F           ; Swap signalling status into low nibble
+    swapf   FSR,F           ; Swap nibbles, signalling status - low, 0xF - high
 
-    andlw   0xF0            ; Isolate signalling status to be sent
-    xorwf   FSR,F           ; Combined with swapped ones complemnt
+    andlw   0xF0            ; Isolate signalling status for ones complement
+    xorwf   FSR,F           ; Ones complement high and signalling status in low
 
     call    LinkTxP         ; Send data to previous block
     btfss   STATUS,Z        ; Skip if data was sent ...
@@ -715,16 +738,17 @@ CheckPrevRx
     xorwf   telemPrv,F      ; Test against last received data
     movwf   telemPrv        ; Replace last received data
     btfss   STATUS,Z        ; Skip if last and just received data match ...
-    goto    PrevRxDone      ; ... else ignore just received data
+    goto    PrevLinkEnd      ; ... else ignore just received data
 
     ; Only four bits of signalling status need to be sent so as a simple error
-    ; check send these in low nibble with ones complement in high nibble
+    ; check these are sent in low nibble with ones complement in high nibble
 
     movf    FSR,W           ; Signalling in low nibble, ones complement in high
-    comf    FSR,F           ; Ones complement the received data
+    swapf   FSR,F           ; Swap nibbles of the received data
+    comf    FSR,F           ; Ones complement the swappeed received data
     xorwf   FSR,F           ; Exclusive or complemented and swapped data
-    btfsc   STATUS,Z        ; Skip if result is zero, i.e. data is ok ...
-    goto    PrevRxDone      ; ... else ignore just received data
+    btfss   STATUS,Z        ; Skip if result is zero, i.e. data is ok ...
+    goto    PrevLinkEnd      ; ... else ignore just received data
 
     andlw   0x0F            ; Clear ones complement from received data
     iorwf   prvCntlr,F      ; OR received data into previous controller status
@@ -733,14 +757,11 @@ CheckPrevRx
 
 PrevRxDone
     bsf     lnkPState,LNKDIRFLG ; Resume sending to previous controller
-    bsf     lnkPState,LNKSYNFLG ; Synchronising link before sending data
 
 PrevLinkEnd
 
     ; Service link with next controller
     ;******************************************************************
-
-    call    SrvcLinkN           ; Service next controller link
 
     btfss   lnkNState,LNKDIRFLG ; Skip if replying to next controller ...
     goto    CheckNextRx         ; ... else skip over next controller send
@@ -749,7 +770,7 @@ PrevLinkEnd
     ;******************************************************************
 
     ; Only four bits of signalling status need to be sent so as a simple error
-    ; check these are in low nibble with their ones complement in high nibble
+    ; check these are sent in low nibble with ones complement in high nibble
 
     movf    lclCntlr,W      ; Get local controller status
 
@@ -786,7 +807,7 @@ CheckNextRx
     goto    NextLinkEnd     ; ... else ignore just received data
 
     ; Only four bits of signalling status need to be sent so as a simple error
-    ; check send these in low nibble with ones complement in high nibble
+    ; check these are sent in low nibble with ones complement in high nibble
 
     swapf   FSR,W           ; Signalling in high nibble, ones complement in low
     comf    FSR,F           ; Ones complement the received data
@@ -1073,14 +1094,12 @@ BlockOccupied ; End of block state machine, this block occupied
 
 BlockEnd    ; End of signal block state machine
 
-    ; Set aspect display output
+    ; Get aspect display value
     ;******************************************************************
 
-    movlw   ~ASPOUTMSK
-    andwf   ASPPORT,F
     movf    lclCntlr,W
     call    GetAspectMask
-    iorwf   ASPPORT,F
+    movwf   aspout
 
 
     ;******************************************************************
@@ -1118,8 +1137,6 @@ SerTxN      SerialTx  srlIfStat, serNBffr, TXNFLG
 IsTxIdleN   IsTxIdle  serNBitCnt
     return
 
-SrvcLinkN   SrvcLink  lnkNState, lnkNTimer, serNTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMON, EnableTxN, InitTxN, IsTxIdleN, TxBreakN, EnableRxN, InitRxN
-
 LinkRxN     LinkRx  lnkNState, SerRxN
 
 LinkTxN     LinkTx  lnkNState, SerTxN
@@ -1156,8 +1173,6 @@ SerTxP      SerialTx  srlIfStat, serPBffr, TXPFLG
 
 IsTxIdleP   IsTxIdle  serPBitCnt
     return
-
-SrvcLinkP   SrvcLink  lnkPState, lnkPTimer, serPTimer, INTLNKDLYRX, INTLNKDLYTX, INTLINKTMOP, EnableTxP, InitTxP, IsTxIdleP, TxBreakP, EnableRxP, InitRxP
 
 LinkRxP     LinkRx  lnkPState, SerRxP
 
