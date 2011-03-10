@@ -22,6 +22,8 @@
 ;                   to display a stop aspect or to cycle aspect from  *
 ;                   stop to clear at fixed intervals after the        *
 ;                   passing of a train.                               *
+;                   Outputs aspect display for United Kingdom         *
+;                   Railways 4 aspect MAS signals.                    *
 ;                                                                     *
 ;    Author:        Chris White                                       *
 ;    Company:       Monitor Computing Services Ltd.                   *
@@ -57,10 +59,10 @@
 ;          !Detecting  <- RA4|3      16|                              *
 ;                            |4      15|                              *
 ;                            |5      14|      Aspects:                *
-;                         RB0|6      13|RB7 ->                        *
-; Next <-> / !Inhibit  -> RB1|7      12|RB6 ->                        *
-;            Previous <-> RB2|8      11|RB5 ->                        *
-;       Special speed  -> RB3|9      10|RB4 ->                        *
+;                         RB0|6      13|RB7 -> Red                    *
+; Next <-> / !Inhibit  -> RB1|7      12|RB6 -> Yellow                 *
+;            Previous <-> RB2|8      11|RB5 -> Double yellow          *
+;       Special speed  -> RB3|9      10|RB4 -> Green                  *
 ;                            +---------+                              *
 ;                                                                     *
 ;**********************************************************************
@@ -186,8 +188,11 @@ TRAINLEAVINGR  EQU  6           ; Train leaving reverse
 BLKSTATE       EQU  B'00000111' ; Mask to isolate block
 
 ; Aspect values
-ASPSTP      EQU     B'00000000' ; Stop aspect value
-ASPCLR      EQU     B'11000000' ; Clear aspect value
+ASPRED      EQU     B'00000000' ; Red aspect value
+ASPYELLOW   EQU     B'01000000' ; Yellow aspect value mask
+ASPDOUBLE   EQU     B'10000000' ; Double yellow aspect value mask
+ASPGREEN    EQU     B'11000000' ; Green aspect value
+ASPDGFLG    EQU     7           ; Green or double yellow value flag bit
 ASPINCR     EQU     B'01000000' ; Aspect value increment
 ASPSTATE    EQU     B'11000000' ; Aspect value mask
 
@@ -209,6 +214,14 @@ EXTMSK      EQU     B'00100000' ; Exit detection state bit mask
 
 ; Aspect output constants
 ASPPORT     EQU     PORTB       ; Aspect output port
+REDOUT      EQU     7           ; Red aspect output bit
+REDMSK      EQU     B'10000000' ; Mask for red aspect output bit
+YELLOWOUT   EQU     6           ; Yellow aspect output bit
+YELLOWMSK   EQU     B'01000000' ; Mask for yellow aspect output bit
+DOUBLEOUT   EQU     4           ; Double yellow aspect output bit
+DBLYLWMSK   EQU     B'00010000' ; Mask for double yellow aspect output bit
+GREENOUT    EQU     5           ; Green aspect output bit
+GREENMSK    EQU     B'00100000' ; Mask for green aspect output bit
 ASPOUTMSK   EQU     B'11110000' ; Mask for aspect output bits
 
 INPACTV     EQU     7           ; Indicates debounce accumulator > high water
@@ -322,10 +335,10 @@ lclCntlr        ; Status of this controller
                 ;   bit 4    - Signal inhibit (display red aspect)
                 ;   bit 5    - Exit detection
                 ;   bits 6,7 - Aspect value
-                ;     0 - Stop
-                ;     1 - 
-                ;     2 - 
-                ;     3 - Clear
+                ;     0 - Red
+                ;     1 - Yellow
+                ;     2 - Double Yellow
+                ;     3 - Green
 
 nxtCntlr        ; Status received from next controller
                 ;   bits 0,3 - Ignored (ones complement of bits 4 to 7)
@@ -489,6 +502,31 @@ EndISR
 ; Subroutine to return aspect output mask in accumulator
 ;**********************************************************************
 GetAspectMask
+    movf    aspOut,W            ; Get aspect display value
+    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
+    retlw   REDMSK          ; ... else display red aspect
+
+    xorlw   ASPGREEN        ; Test for green aspect required
+    btfsc   STATUS,Z        ; Skip if not zero (not green) ...
+    retlw   GREENMSK        ; ... else display green aspect
+
+    movlw   HALFSEC
+    andwf   secCount,w      ; Test for flashing aspect blanking period
+
+    btfss   aspOut,ASPDGFLG ; Skip if double yellow required ...
+    goto    GetYellowAspect ; ... else display yellow aspect
+
+    movlw   0               ; Blank aspect display
+    btfsc   nxtCntlr,SPDFLG ; Skip if next signal not at special speed ...
+    btfss   STATUS,Z        ; ... else skip if aspect blanking period ...
+    movlw   DBLYLWMSK       ; ... else display double yellow aspect
+    return
+
+GetYellowAspect
+    movlw   0               ; Blank aspect display
+    btfsc   prvCntlr,SPDFLG ; Skip if local signal not at special speed ...
+    btfss   STATUS,Z        ; ... else skip if aspect blanking period ...
+    movlw   YELLOWMSK       ; ... else display yellow aspect
     return
 
 
@@ -852,11 +890,21 @@ NextLinkEnd
     movlw   ASPSTATE
     andwf   nxtCntlr,W      ; Get local signal aspect from next controller
 
+    btfsc   prvCntlr,SPDFLG ; Skip if local signal not at special speed ...
+    movlw   ASPYELLOW       ; ... else restrict aspect to yellow ...
+    btfsc   STATUS,Z        ; ... if signal aspect from next is red ...
+    clrw                    ; ... restore aspect to red
+
     btfss   lclCntlr,INHFLG ; Skip if signal is line inhibited ...
     iorwf   lclCntlr,F      ; ... else use the signal aspect for display
 
     ; This block's signal aspect value (displayed by previous controller)
-    ; depends on the aspect value of the local signal.
+    ; depends on the aspect value of the local signal such that:
+    ; 'Local'    ->    'This'
+    ; Red              Yellow
+    ; Yellow           Double Yellow
+    ; Double Yellow    Green
+    ; Green            Green
 
     movlw   ~ASPSTATE
     andwf   prvCntlr,F      ; Clear signal aspect value bits (= stop aspect)
@@ -864,7 +912,7 @@ NextLinkEnd
     movlw   ASPINCR
     addwf   lclCntlr,W      ; Increment local signal aspect value into W
     btfsc   STATUS,C        ; Skip if no overflow ...
-    movlw   ASPCLR          ; ... else set for clear aspect
+    movlw   ASPGREEN        ; ... else set for green aspect
     andlw   ASPSTATE        ; Isolate new aspect value bits   
 
     btfss   nxtCntlr,REVFLG ; Skip if next block is line reversed ...
