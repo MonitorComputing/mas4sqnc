@@ -4,12 +4,12 @@
     <configuration>
         <data xmlns="http://www.netbeans.org/ns/make-project/1">
             <name>mas4sqnc</name>
-            <creation-uuid>a2f55072-d11b-4fb8-bb08-757ea4287f64</creation-uuid>
+            <creation-uuid>7766b8d1-42b7-4953-9503-ec2be9aa459b</creation-uuid>
             <make-project-type>0</make-project-type>
             <c-extensions/>
             <cpp-extensions/>
             <header-extensions/>
-            <asminc-extensions>inc</asminc-extensions>
+            <asminc-extensions/>
             <sourceEncoding>ISO-8859-1</sourceEncoding>
             <make-dep-projects/>
         </data>
