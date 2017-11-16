@@ -185,14 +185,15 @@ TRAINENTERINGR EQU  5           ; Train entering reverse
 TRAINLEAVINGR  EQU  6           ; Train leaving reverse
 BLKSTATE       EQU  B'00000111' ; Mask to isolate block
 
-; Aspect values
+; Aspect values (range from 0 - stop, to 3 - clear)
 ASPRED      EQU     B'00000000' ; Red aspect value
-ASPYELLOW   EQU     B'01000000' ; Yellow aspect value mask
-ASPDOUBLE   EQU     B'10000000' ; Double yellow aspect value mask
+ASPYELLOW   EQU     B'01000000' ; Yellow aspect value
+ASPDOUBLE   EQU     B'10000000' ; Double yellow aspect value
 ASPGREEN    EQU     B'11000000' ; Green aspect value
-ASPDGFLG    EQU     7           ; Green or double yellow value flag bit
+ASPDYFLG    EQU     7           ; Double yellow aspect flag bit
 ASPINCR     EQU     B'01000000' ; Aspect value increment
 ASPSTATE    EQU     B'11000000' ; Aspect value mask
+ASPRESET    EQU     ASPGREEN
 
 ; Controller status flags
 ENTFLG      EQU     1           ; Entrance detection bit in status byte
@@ -333,16 +334,12 @@ lclCntlr        ; Status of this controller
                 ;   bit 4    - Signal inhibit (display red aspect)
                 ;   bit 5    - Exit detection
                 ;   bits 6,7 - Aspect value
-                ;     0 - Red
-                ;     1 - Yellow
-                ;     2 - Double Yellow
-                ;     3 - Green
 
 nxtCntlr        ; Status received from next controller
                 ;   bits 0,3 - Ignored (ones complement of bits 4 to 7)
                 ;   bit 4    - Special speed
                 ;   bit 5    - Line reversed
-                ;   bits 6,7 - Aspect value (bits as for this controller)
+                ;   bits 6,7 - Aspect value
 
 prvCntlr        ; Status received from previous controller
                 ;   bit 0    - Ignored
@@ -351,7 +348,7 @@ prvCntlr        ; Status received from previous controller
                 ; Status sent to previous controller
                 ;   bit 4    - Special speed
                 ;   bit 5    - Line reversed
-                ;   bits 6,7 - Aspect value (bits as for this controller)
+                ;   bits 6,7 - Aspect value
 
 aspectTime      ; Aspect interval for simulating next signal
 nxtTimer        ; Second counter for simulating next signal
@@ -474,7 +471,7 @@ EmitterOn
 
 SensorEnd
 
-    ; Output aspect display
+    ; Set aspect output bits
     ;******************************************************************
 
     call    GetAspectMask
@@ -497,10 +494,24 @@ EndISR
 
 
 ;**********************************************************************
+; Subroutine to read EEPROM
+;**********************************************************************
+
+ReadEEPROM
+    movwf   EEADR           ; Set address of EEPROM location to read
+    BANKSEL EECON1
+    bsf     EECON1,RD       ; Trigger EEPROM read
+    BANKSEL EEDATA
+    movf    EEDATA,W        ; Get EEPROM data read
+    BANKSEL TMR0
+    return
+
+
+;**********************************************************************
 ; Subroutine to return aspect output mask in accumulator
 ;**********************************************************************
 GetAspectMask
-    movf    aspOut,W            ; Get aspect display value
+    movf    aspOut,W        ; Get aspect display value
     btfsc   STATUS,Z        ; Skip if not zero (not red) ...
     retlw   REDMSK          ; ... else display red aspect
 
@@ -511,21 +522,15 @@ GetAspectMask
     movlw   HALFSEC
     andwf   secCount,w      ; Test for flashing aspect blanking period
 
-    btfss   aspOut,ASPDGFLG ; Skip if double yellow required ...
-    goto    GetYellowAspect ; ... else display yellow aspect
-
-    movlw   0               ; Blank aspect display
-    btfsc   nxtCntlr,SPDFLG ; Skip if next signal not at special speed ...
-    btfss   STATUS,Z        ; ... else skip if aspect blanking period ...
+    movlw   YELLOWMSK       ; Display yellow aspect
+    btfsc   aspOut,ASPDYFLG ; Skip if double yellow not required ...
     movlw   DBLYLWMSK       ; ... else display double yellow aspect
-    return
 
-GetYellowAspect
-    movlw   0               ; Blank aspect display
-    btfsc   prvCntlr,SPDFLG ; Skip if local signal not at special speed ...
-    btfss   STATUS,Z        ; ... else skip if aspect blanking period ...
-    movlw   YELLOWMSK       ; ... else display yellow aspect
-    return
+    btfss   nxtCntlr,SPDFLG ; Skip if next signal at special speed ...
+    return                  ; ... else display (double) yellow aspect
+    btfss   STATUS,Z        ; Skip if aspect blanking period ...
+    return                  ; ... else display (double) yellow aspect
+    retlw   0               ; Blank aspect display
 
 
 ;**********************************************************************
@@ -591,12 +596,7 @@ ClearRAM
     ;******************************************************************
 
     movlw   low EEaspectTime
-    movwf   EEADR           ; Set address of EEPROM location to read
-    BANKSEL EECON1
-    bsf     EECON1,RD       ; Trigger EEPROM read
-    BANKSEL EEDATA
-    movf    EEDATA,W        ; Get EEPROM data read
-    BANKSEL TMR0
+    call    ReadEEPROM
     movwf   aspectTime      ; Initialise aspect interval for next signal
     movwf   nxtTimer        ; Initialise timer used to simulate next signal
 
@@ -897,12 +897,7 @@ NextLinkEnd
     iorwf   lclCntlr,F      ; ... else use the signal aspect for display
 
     ; This block's signal aspect value (displayed by previous controller)
-    ; depends on the aspect value of the local signal such that:
-    ; 'Local'    ->    'This'
-    ; Red              Yellow
-    ; Yellow           Double Yellow
-    ; Double Yellow    Green
-    ; Green            Green
+    ; depends on the aspect value of the local signal.
 
     movlw   ~ASPSTATE
     andwf   prvCntlr,F      ; Clear signal aspect value bits (= stop aspect)
@@ -910,7 +905,7 @@ NextLinkEnd
     movlw   ASPINCR
     addwf   lclCntlr,W      ; Increment local signal aspect value into W
     btfsc   STATUS,C        ; Skip if no overflow ...
-    movlw   ASPGREEN        ; ... else set for green aspect
+    movlw   ASPRESET        ; ... else reset aspect value
     andlw   ASPSTATE        ; Isolate new aspect value bits   
 
     btfss   nxtCntlr,REVFLG ; Skip if next block is line reversed ...
@@ -1108,7 +1103,7 @@ BlockOccupied ; End of block state machine, this block occupied
 
 BlockEnd    ; End of signal block state machine
 
-    ; Get aspect display value
+    ; Set aspect display value
     ;******************************************************************
 
     movf    lclCntlr,W      ; Get controller status
