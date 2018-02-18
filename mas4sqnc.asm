@@ -88,6 +88,12 @@ endRAM      EQU afterRAM - 1
 ;**********************************************************************
 ; Code
 ;**********************************************************************
+UserNextRx  macro
+
+    btfss   inputs,SPDBIT   ; Skip if normal speed input set ...
+    iorlw   SPDMSK          ; ... else display flashing warning aspects
+
+    endm
 
 ; Include serial link interface macros
 ;  - Serial link bit timing is performed by link service routines
@@ -98,12 +104,9 @@ endRAM      EQU afterRAM - 1
 
 
 ;**********************************************************************
-; Subroutine to return aspect output mask in accumulator
+; Subroutine to return aspect output value in accumulator
 ;**********************************************************************
 GetAspectOutput
-    btfss   inputs,SPDBIT   ; Skip if normal speed input set ...
-    bsf     nxtCntlr,SPDFLG ; ... else display flashing warning aspects
-
     movf    aspVal,W        ; Get aspect display value
     btfsc   STATUS,Z        ; Skip if not zero (not red) ...
     retlw   REDMSK          ; ... else display red aspect
