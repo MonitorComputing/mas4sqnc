@@ -56,7 +56,7 @@
 #include "blcksqnc/blcksqnc_def.inc"
 
 ; Aspect values
-ASPDYFLG    EQU     ASPCLFLG
+ASPDYFLG    EQU     ASPW2FLG
 ASPGREEN    EQU     ASPCLR
 
 ; Aspect output constants
@@ -91,7 +91,7 @@ endRAM      EQU afterRAM - 1
 UserNextRx  macro
 
     btfss   inputs,SPDBIT   ; Skip if normal speed input set ...
-    iorlw   SPDMSK          ; ... else display flashing warning aspects
+    andlw   ~SPDMSK         ; ... else display flashing warning aspects
 
     endm
 
@@ -122,7 +122,7 @@ GetAspectOutput
     btfsc   aspVal,ASPDYFLG ; Skip if double yellow not required ...
     movlw   DBLYLWMSK       ; ... else display double yellow aspect
 
-    btfss   nxtCntlr,SPDFLG ; Skip if next signal not at normal speed ...
+    btfsc   nxtCntlr,SPDFLG ; Skip if next signal not at normal speed ...
     return                  ; ... else display (double) yellow aspect
     btfss   STATUS,Z        ; Skip if aspect blanking period ...
     return                  ; ... else display (double) yellow aspect
