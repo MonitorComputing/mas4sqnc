@@ -22,13 +22,13 @@
 ;                            +---+ +---+                              *
 ;                 Red  <- RA2|1  |_| 18|RA1 -> Green                  *
 ;              Yellow  <- RA3|2      17|RA0 -> Second Yellow          *
-;          !Detecting <-> RA4|3      16|                              *
-;                            |4      15|                              *
+;          !Detecting <-> RA4|3      16|RA7 -> !Emitter               *
+;               Sensor -> RA5|4      15|RA6 -> !Block occupied        *
 ;                            |5      14|                              *
-;     !Latch Signal On -> RB0|6      13|RB7 <-> Next / <- !Inhibit    *
-;       !Line reversed -> RB1|7      12|RB6 <-> Previous              *
-;   Line bidirectional -> RB2|8      11|RB5 ->  !Emitter              *
-;         Normal speed -> RB3|9      10|RB4 <-  Sensor                *
+;     !Latch Signal On -> RB0|6      13|RB7 <- !ToTi (block occupied) *
+;       !Line reversed -> RB1|7      12|RB6 <- !Approach clear        *
+;   Line bidirectional -> RB2|8      11|RB5 <-> Next / <- !Inhibit    *
+;         Normal speed -> RB3|9      10|RB4 <-> Previous              *
 ;                            +---------+                              *
 ;                                                                     *
 ;**********************************************************************
@@ -58,7 +58,7 @@ BLANKMSK    EQU     B'00000000' ; Mask for blank aspect output
 afterRAM
             endc
 endRAM      EQU afterRAM - 1
-#if RAM_End < endRAM
+#if RAM0_End < endRAM
     error "This program ran out of RAM!"
 #endif
 
