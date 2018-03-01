@@ -7,6 +7,10 @@
 ;              This is a specialisation for United Kingdom Railways 4 *
 ;              aspect MAS colour light signals.                       *
 ;                                                                     *
+;              Speed signalling input causes signals in rear of red   *
+;              stop aspect to display steady single yellow, flashing  *
+;              single yellow, and flashing double yellow.             *
+;                                                                     *
 ; Author: Chris White (whitecf69@gmail.com)                           *
 ;                                                                     *
 ; Copyright (C) 2018 by Monitor Computing Services Limited, licensed  *
@@ -72,10 +76,30 @@ endRAM      EQU afterRAM - 1
 ;**********************************************************************
 ; Code
 ;**********************************************************************
-UserNextRx  macro
+UserPrevTx  macro
 
-    btfss   inputs,SPDBIT   ; Skip if normal speed input set ...
-    andlw   ~SPDMSK         ; ... else display flashing warning aspects
+    movwf   FSR             ; Save the status to be sent
+
+    ; Suppress local speed input unless aspect is stop
+    movf    aspVal,W        ; Get aspect display value
+    btfss   STATUS,Z        ; Skip if zero (red) ...
+    bsf     FSR,SPDFLG      ; ... else send normal speed to previous controller
+
+    ; Next speed is not propogated if aspect is stop
+    movf    aspVal,W        ; Get aspect display value
+    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
+    goto    PrevSpeedSet    ; ... else don't propogate speed
+
+    ; Next speed is not propogated if aspect is clear
+    addlw   ASPINCR         ; Increment aspect value
+    btfsc   STATUS,C        ; Skip if no overflow ...
+    goto    PrevSpeedSet    ; ... else don't propogate speed
+
+    btfss   nxtCntlr,SPDFLG ; Skip if next signal at normal speed ...
+    bcf     FSR,SPDFLG      ; ... else propogate next speed to previous
+
+PrevSpeedSet
+    movf    FSR,W           ; Get back the status to be sent
 
     endm
 
@@ -92,8 +116,16 @@ UserNextRx  macro
 ;**********************************************************************
 GetAspectOutput
     movf    aspVal,W        ; Get aspect display value
-    btfsc   STATUS,Z        ; Skip if not zero (not red) ...
+    btfsc   STATUS,Z        ; Skip if not zero (red) ...
     retlw   REDMSK          ; ... else display red aspect
+
+    movwf   FSR             ; Save aspect display value
+    movlw   ASPINCR
+    btfss   nxtCntlr,SPDFLG ; Skip if next signal at normal speed ...
+    subwf   FSR,F           ; ... else reduce aspect to display
+    btfsc   STATUS,Z        ; Skip if not reduced to zero (red) ...
+    retlw   YELLOWMSK       ; ... else display steady single yellow aspect
+    movf    FSR,W           ; Get, possibly reduced, aspect display value
 
     xorlw   ASPGREEN        ; Test for green aspect required
     btfsc   STATUS,Z        ; Skip if not zero (not green) ...
@@ -103,7 +135,7 @@ GetAspectOutput
     andwf   secCount,W      ; Test for flashing aspect blanking period
 
     movlw   YELLOWMSK       ; Display yellow aspect
-    btfsc   aspVal,ASPDYFLG ; Skip if double yellow not required ...
+    btfsc   FSR,ASPDYFLG    ; Skip if double yellow not required ...
     movlw   DBLYLWMSK       ; ... else display double yellow aspect
 
     btfsc   nxtCntlr,SPDFLG ; Skip if next signal not at normal speed ...
