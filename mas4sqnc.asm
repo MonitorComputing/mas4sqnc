@@ -9,7 +9,9 @@
 ;                                                                     *
 ;              Speed signalling input causes signals in rear of red   *
 ;              stop aspect to display steady single yellow, flashing  *
-;              single yellow, and flashing double yellow.             *
+;              single yellow, and flashing double yellow. Speed       *
+;              signalling automatically requires signal be approach   *
+;              cleared.                                               *
 ;                                                                     *
 ; Author: Chris White (whitecf69@gmail.com)                           *
 ;                                                                     *
@@ -32,7 +34,7 @@
 ;     !Latch Signal On -> RB0|6      13|RB7 <- !ToTi (block occupied) *
 ;       !Line reversed -> RB1|7      12|RB6 <- !Approach clear        *
 ;   Line bidirectional -> RB2|8      11|RB5 <-> Next / <- !Inhibit    *
-;         Normal speed -> RB3|9      10|RB4 <-> Previous              *
+;    !Speed signalling -> RB3|9      10|RB4 <-> Previous              *
 ;                            +---------+                              *
 ;                                                                     *
 ;**********************************************************************
@@ -76,27 +78,35 @@ endRAM      EQU afterRAM - 1
 ;**********************************************************************
 ; Code
 ;**********************************************************************
+UserInputs  macro
+
+    btfss   inputs,SPDBIT   ; Skip if not speed signalling (active low) ...
+    bcf     inputs,APRBIT   ; ... else speed signalling implies approach clear
+
+    endm
+
+
 UserPrevTx  macro
 
     movwf   FSR             ; Save the status to be sent
 
-    ; Suppress local speed input unless aspect is stop
+    ; Suppress speed signalling input unless aspect is stop
     movf    aspVal,W        ; Get aspect display value
     btfss   STATUS,Z        ; Skip if zero (red) ...
     bsf     FSR,SPDFLG      ; ... else send normal speed to previous controller
 
-    ; Next speed is not propogated if aspect is stop
+    ; Next speed signalling is not propogated if aspect is stop
     movf    aspVal,W        ; Get aspect display value
     btfsc   STATUS,Z        ; Skip if not zero (not red) ...
-    goto    PrevSpeedSet    ; ... else don't propogate speed
+    goto    PrevSpeedSet    ; ... else don't propogate speed signalling
 
-    ; Next speed is not propogated if aspect is clear
+    ; Next speed signalling is not propogated if aspect is clear
     addlw   ASPINCR         ; Increment aspect value
     btfsc   STATUS,C        ; Skip if no overflow ...
-    goto    PrevSpeedSet    ; ... else don't propogate speed
+    goto    PrevSpeedSet    ; ... else don't propogate speed signalling
 
     btfss   nxtCntlr,SPDFLG ; Skip if next signal at normal speed ...
-    bcf     FSR,SPDFLG      ; ... else propogate next speed to previous
+    bcf     FSR,SPDFLG      ; ... else propogate speed signalling to previous
 
 PrevSpeedSet
     movf    FSR,W           ; Get back the status to be sent
@@ -138,7 +148,7 @@ GetAspectOutput
     btfsc   FSR,ASPDYFLG    ; Skip if double yellow not required ...
     movlw   DBLYLWMSK       ; ... else display double yellow aspect
 
-    btfsc   nxtCntlr,SPDFLG ; Skip if next signal not at normal speed ...
+    btfsc   nxtCntlr,SPDFLG ; Skip if speed signalling ...
     return                  ; ... else display (double) yellow aspect
     btfss   STATUS,Z        ; Skip if aspect blanking period ...
     return                  ; ... else display (double) yellow aspect
