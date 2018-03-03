@@ -61,11 +61,11 @@ BLANKMSK    EQU     B'00000000' ; Mask for blank aspect output
 ; Variable registers
 ;**********************************************************************
 #include "blcksqnc/blcksqnc_ram.inc"
-afterRAM
+afterRAM0
             endc
-endRAM      EQU afterRAM - 1
-#if RAM0_End < endRAM
-    error "This program ran out of RAM!"
+endRAM0     EQU afterRAM0 - 1
+#if RAM0_End < endRAM0
+    error "This program ran out of Bank 0 RAM!"
 #endif
 
 
