@@ -21,7 +21,6 @@
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
-    <Elem>../utility/pic</Elem>
     <Elem>.</Elem>
   </sourceRootList>
   <projectmakefile>Makefile</projectmakefile>
